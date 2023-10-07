@@ -1,0 +1,35 @@
+{
+  "name": "xtoncore",
+  "version": "1.2.2",
+  "description": "This library from Xtron Studio will help you create a Handler for Discord.js more easily.",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "del -rf dist && tsup src/index.ts --format cjs,esm --clean",
+    "watch": "yarn build --watch src",
+    "prepublishOnly": "yarn build"
+  },
+  "keywords": [
+    "discord.js"
+  ],
+  "author": "Narabordee Wirakkamo",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/figlet": "^1.5.6",
+    "@types/gradient-string": "^1.1.3",
+    "discord.js": "^14.7.1",
+    "tsup": "^6.7.0",
+    "typescript": "^4.9.5",
+    "winston": "^3.8.2"
+  },
+  "dependencies": {
+    "colors": "^1.4.0",
+    "figlet": "^1.6.0",
+    "gradient-string": "^2.0.2"
+  }
+}
