@@ -1,7 +1,7 @@
 {
   "name": "xtoncore",
-  "version": "1.2.2",
-  "description": "This library from Xtron Studio will help you create a Handler for Discord.js more easily.",
+  "version": "2.0.0",
+  "description": "Enhanced Discord.js handler library with advanced features including performance monitoring, hot reload, component management, and more.",
   "types": "./index.d.ts",
   "exports": {
     ".": {
@@ -12,24 +12,58 @@
   "scripts": {
     "build": "del -rf dist && tsup src/index.ts --format cjs,esm --clean",
     "watch": "yarn build --watch src",
-    "prepublishOnly": "yarn build"
+    "dev": "NODE_ENV=development yarn watch",
+    "prepublishOnly": "yarn build",
+    "test": "echo \"Tests coming soon\" && exit 0",
+    "lint": "echo \"Linting coming soon\" && exit 0"
   },
   "keywords": [
-    "discord.js"
+    "discord.js",
+    "discord",
+    "bot",
+    "handler",
+    "commands",
+    "events",
+    "components",
+    "performance",
+    "monitoring",
+    "hot-reload",
+    "typescript"
   ],
   "author": "Narabordee Wirakkamo",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NarawitC/xtoncore.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NarawitC/xtoncore/issues"
+  },
+  "homepage": "https://github.com/NarawitC/xtoncore#readme",
   "devDependencies": {
     "@types/figlet": "^1.5.6",
     "@types/gradient-string": "^1.1.3",
-    "discord.js": "^14.7.1",
-    "tsup": "^6.7.0",
-    "typescript": "^4.9.5",
-    "winston": "^3.8.2"
+    "@types/node": "^20.0.0",
+    "discord.js": "^14.14.1",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3"
   },
   "dependencies": {
     "colors": "^1.4.0",
     "figlet": "^1.6.0",
-    "gradient-string": "^2.0.2"
-  }
+    "gradient-string": "^2.0.2",
+    "winston": "^3.11.0"
+  },
+  "peerDependencies": {
+    "discord.js": "^14.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ]
 }

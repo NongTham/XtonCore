@@ -1,44 +1,49 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs/promises';
+import path from 'path';
 
-export function getFilePaths(directory?: string, nesting?: boolean): string[] {
+export async function getFilePaths(directory?: string, nesting?: boolean): Promise<string[]> {
   let filePaths: string[] = [];
   if (!directory) return filePaths;
 
-  const files = fs.readdirSync(directory, { withFileTypes: true });
+  try {
+    const items = await fs.readdir(directory, { withFileTypes: true });
 
-  for (const file of files) {
-    const filePath = path.join(directory, file.name);
+    for (const item of items) {
+      const itemPath = path.join(directory, item.name);
 
-    if (file.isFile()) {
-      filePaths.push(filePath);
+      if (item.isFile()) {
+        filePaths.push(itemPath);
+      }
+
+      if (nesting && item.isDirectory()) {
+        const nestedFiles = await getFilePaths(itemPath, true);
+        filePaths = [...filePaths, ...nestedFiles];
+      }
     }
-
-    if (nesting && file.isDirectory()) {
-      filePaths = [...filePaths, ...getFilePaths(filePath, true)];
-    }
+  } catch (error) {
+    console.error(`[XtonCoreUtils] Error reading directory ${directory}:`, error);
   }
-
   return filePaths;
 }
 
-export function getFolderPaths(directory?: string, nesting?: boolean): string[] {
+export async function getFolderPaths(directory?: string, nesting?: boolean): Promise<string[]> {
   let folderPaths: string[] = [];
   if (!directory) return folderPaths;
 
-  const folders = fs.readdirSync(directory, { withFileTypes: true });
-
-  for (const folder of folders) {
-    const folderPath = path.join(directory, folder.name);
-
-    if (folder.isDirectory()) {
-      folderPaths.push(folderPath);
-
-      if (nesting) {
-        folderPaths = [...folderPaths, ...getFolderPaths(folderPath, true)];
+  try {
+    const items = await fs.readdir(directory, { withFileTypes: true });
+    for (const item of items) {
+      const itemPath = path.join(directory, item.name);
+      if (item.isDirectory()) {
+        folderPaths.push(itemPath);
+        if (nesting) {
+          const nestedFolders = await getFolderPaths(itemPath, true);
+          folderPaths = [...folderPaths, ...nestedFolders];
+        }
       }
     }
+  } catch (error) {
+    console.error(`[XtonCoreUtils] Error reading directory ${directory}:`, error);
   }
-
   return folderPaths;
 }

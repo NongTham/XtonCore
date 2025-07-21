@@ -1,30 +1,39 @@
-const { getFilePaths } = require('./getPaths');
+// src/utils/buildCommandTree.ts (ปรับปรุง)
+import { getFilePaths } from './getPaths'; // สมมติว่าเป็น async และ path ถูก resolve ถูกต้อง
+import path from 'path';
+import { pathToFileURL } from 'node:url'; // <--- เพิ่มการ import นี้
 
-export function buildCommandTree(commandsDir?: string) {
-  const commandTree = [];
-
+export async function buildCommandTree(commandsDir?: string): Promise<any[]> {
+  const commandTree: any[] = [];
   if (!commandsDir) return [];
-
-  const commandFilePaths = getFilePaths(commandsDir, true);
+  const commandFilePaths = await getFilePaths(commandsDir, true);
 
   for (const commandFilePath of commandFilePaths) {
-    let { data, run, deleted, ...rest } = require(commandFilePath);
-    if (!data) throw new Error(`File ${commandFilePath} must export "data".`);
-    if (!run) throw new Error(`File ${commandFilePath} must export a "run" function.`);
-    if (!data.name) throw new Error(`File ${commandFilePath} must have a command name.`);
-    if (!data.description) throw new Error(`File ${commandFilePath} must have a command description.`);
-
     try {
-      data = data.toJSON();
-    } catch (error) {}
+      const absolutePath = path.resolve(commandFilePath);
+      const fileURL = pathToFileURL(absolutePath).href;
+      const commandModule = await import(fileURL);
 
-    commandTree.push({
-      ...data,
-      ...rest,
-      deleted,
-      run,
-    });
+      let { data, run, deleted, ...rest } = commandModule.default || commandModule;
+
+      if (!data) throw new Error(`File ${commandFilePath} must export "data".`);
+      if (!run) throw new Error(`File ${commandFilePath} must export a "run" function.`);
+      if (!data.name) throw new Error(`File ${commandFilePath} must have a command name.`);
+      if (!data.description) throw new Error(`File ${commandFilePath} must have a command description.`);
+
+      try {
+        data = data.toJSON ? data.toJSON() : data;
+      } catch (error) { /* ปล่อยผ่านถ้า data ไม่ใช่ object ที่มี toJSON */ }
+
+      commandTree.push({
+        ...data,
+        ...rest,
+        deleted,
+        run,
+      });
+    } catch (error) {
+      console.error(`[XtonCoreBuilder] Error loading command from ${commandFilePath}:`, error);
+    }
   }
-
   return commandTree;
 }
