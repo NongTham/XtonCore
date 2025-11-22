@@ -2519,10 +2519,15 @@ var ComponentManager = class {
   client;
   handlers;
   componentsPath;
+  clientHandler;
+  // Will be set after ClientHandler is fully constructed
   constructor(client, componentsPath) {
     this.client = client;
     this.handlers = [];
     this.componentsPath = componentsPath;
+  }
+  setClientHandler(handler) {
+    this.clientHandler = handler;
   }
   async initialize() {
     if (this.componentsPath) {
@@ -2572,7 +2577,7 @@ var ComponentManager = class {
     const handler = this.findHandler(interaction.customId, "button");
     if (handler) {
       try {
-        await handler.run(interaction, this.client, this);
+        await handler.run(interaction, this.client, this.clientHandler);
       } catch (error) {
         Clientlogger.error(`Error executing button handler for ${interaction.customId}:`, error);
         await this.handleInteractionError(interaction, error);
@@ -2583,7 +2588,7 @@ var ComponentManager = class {
     const handler = this.findHandler(interaction.customId, "selectMenu");
     if (handler) {
       try {
-        await handler.run(interaction, this.client, this);
+        await handler.run(interaction, this.client, this.clientHandler);
       } catch (error) {
         Clientlogger.error(`Error executing select menu handler for ${interaction.customId}:`, error);
         await this.handleInteractionError(interaction, error);
@@ -2594,7 +2599,7 @@ var ComponentManager = class {
     const handler = this.findHandler(interaction.customId, "modal");
     if (handler) {
       try {
-        await handler.run(interaction, this.client, this);
+        await handler.run(interaction, this.client, this.clientHandler);
       } catch (error) {
         Clientlogger.error(`Error executing modal handler for ${interaction.customId}:`, error);
         await this.handleInteractionError(interaction, error);
@@ -3267,12 +3272,13 @@ var ComponentHelpers = class {
   static disableAllComponents(components) {
     return components.map((row) => {
       const newRow = new ActionRowBuilder();
-      newRow.components = row.components.map((component) => {
-        if ("setDisabled" in component) {
-          component.setDisabled(true);
+      const disabledComponents = row.components.map((component) => {
+        if ("setDisabled" in component && typeof component.setDisabled === "function") {
+          return component.setDisabled(true);
         }
         return component;
       });
+      newRow.addComponents(...disabledComponents);
       return newRow;
     });
   }
@@ -3466,7 +3472,8 @@ var CommandBuilder = class {
     return builder.addChannelOption((option) => {
       option.setName(name).setDescription(description);
       if (options.required) option.setRequired(true);
-      if (options.channelTypes) option.addChannelTypes(...options.channelTypes);
+      if (options.channelTypes)
+        option.addChannelTypes(...options.channelTypes);
       return option;
     });
   }
@@ -3502,15 +3509,18 @@ var CommandBuilder = class {
     TEXT: [ChannelType.GuildText],
     VOICE: [ChannelType.GuildVoice],
     CATEGORY: [ChannelType.GuildCategory],
-    NEWS: [ChannelType.GuildNews],
+    ANNOUNCEMENT: [ChannelType.GuildAnnouncement],
     STAGE: [ChannelType.GuildStageVoice],
     FORUM: [ChannelType.GuildForum],
-    TEXT_AND_NEWS: [ChannelType.GuildText, ChannelType.GuildNews],
+    TEXT_AND_ANNOUNCEMENT: [
+      ChannelType.GuildText,
+      ChannelType.GuildAnnouncement
+    ],
     ALL_GUILD: [
       ChannelType.GuildText,
       ChannelType.GuildVoice,
       ChannelType.GuildCategory,
-      ChannelType.GuildNews,
+      ChannelType.GuildAnnouncement,
       ChannelType.GuildStageVoice,
       ChannelType.GuildForum
     ]
@@ -3581,6 +3591,7 @@ var ClientHandler = class _ClientHandler {
       rateLimiting.defaultWindow
     );
     this._hotReloadManager = new HotReloadManager(enableHotReload);
+    this._componentManager.setClientHandler(this);
     if (this._validationsPath && !commandsPath) {
       throw new Error(
         'Command validations are only available in the presence of a commands path. Either add "commandsPath" or remove "validationsPath"'
