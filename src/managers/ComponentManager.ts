@@ -15,11 +15,16 @@ export class ComponentManager {
   private client: Client;
   private handlers: ComponentHandler[];
   private componentsPath?: string;
+  private clientHandler?: any; // Will be set after ClientHandler is fully constructed
 
   constructor(client: Client, componentsPath?: string) {
     this.client = client;
     this.handlers = [];
     this.componentsPath = componentsPath;
+  }
+
+  public setClientHandler(handler: any): void {
+    this.clientHandler = handler;
   }
 
   public async initialize(): Promise<void> {
@@ -39,8 +44,8 @@ export class ComponentManager {
       for (const filePath of componentFiles) {
         try {
           const absolutePath = path.resolve(filePath);
-          const fileURL = pathToFileURL(absolutePath).href;
-          const componentModule = await import(fileURL);
+          // Use require for CommonJS compatibility with ts-node
+          const componentModule = require(absolutePath);
           const handler = componentModule.default || componentModule;
 
           if (this.isValidHandler(handler)) {
@@ -83,7 +88,7 @@ export class ComponentManager {
     const handler = this.findHandler(interaction.customId, 'button');
     if (handler) {
       try {
-        await handler.run(interaction, this.client, this);
+        await handler.run(interaction, this.client, this.clientHandler);
       } catch (error) {
         Clientlogger.error(`Error executing button handler for ${interaction.customId}:`, error);
         await this.handleInteractionError(interaction, error);
@@ -95,7 +100,7 @@ export class ComponentManager {
     const handler = this.findHandler(interaction.customId, 'selectMenu');
     if (handler) {
       try {
-        await handler.run(interaction, this.client, this);
+        await handler.run(interaction, this.client, this.clientHandler);
       } catch (error) {
         Clientlogger.error(`Error executing select menu handler for ${interaction.customId}:`, error);
         await this.handleInteractionError(interaction, error);
@@ -107,7 +112,7 @@ export class ComponentManager {
     const handler = this.findHandler(interaction.customId, 'modal');
     if (handler) {
       try {
-        await handler.run(interaction, this.client, this);
+        await handler.run(interaction, this.client, this.clientHandler);
       } catch (error) {
         Clientlogger.error(`Error executing modal handler for ${interaction.customId}:`, error);
         await this.handleInteractionError(interaction, error);

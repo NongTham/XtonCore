@@ -2,6 +2,7 @@ import { Client, AutocompleteInteraction } from 'discord.js';
 import { LocalCommand, ValidationFunction } from './dev';
 import { getFolderPaths, getFilePaths } from './utils/getPaths';
 import { buildCommandTree } from './utils/buildCommandTree';
+import { buildCommandTreeLazy, loadCommandFunction, preloadCommands, preloadAllCommands, LazyCommand } from './utils/buildCommandTreeLazy';
 import { registerCommands } from './utils/registerCommands';
 import { pathToFileURL } from 'node:url';
 import { Clientlogger, Logger } from "./logger";
@@ -15,6 +16,20 @@ import gradient from 'gradient-string';
 import figlet from 'figlet';
 import path from 'path';
 
+// Re-export types and utilities for better DX
+export type { LocalCommand, ValidationFunction, CommandRunOptions } from './dev';
+export { PerformanceManager } from './managers/PerformanceManager';
+export { CooldownManager } from './managers/CooldownManager';
+export { ComponentManager } from './managers/ComponentManager';
+export { PermissionManager } from './managers/PermissionManager';
+export { RateLimiter } from './managers/RateLimiter';
+export { HotReloadManager } from './managers/HotReloadManager';
+export { EnhancedEmbedBuilder } from './utils/EmbedBuilder';
+export { ComponentHelpers } from './utils/ComponentHelpers';
+export { InputSanitizer } from './utils/InputSanitizer';
+export { CommandBuilder } from './utils/CommandBuilder';
+export { Logger, Clientlogger } from './logger';
+
 interface ClientHandlerOptions {
   client: Client;
   commandsPath?: string;
@@ -24,6 +39,10 @@ interface ClientHandlerOptions {
   guild?: string;
   ownerIds?: string[];
   enableHotReload?: boolean;
+  /** ⚡ Enable lazy loading for faster startup (default: true) */
+  lazyLoading?: boolean;
+  /** Commands to preload immediately (useful for frequently used commands) */
+  preloadCommands?: string[];
   rateLimiting?: {
     enabled: boolean;
     defaultLimit?: number;
@@ -73,6 +92,8 @@ export class ClientHandler {
       guild,
       ownerIds = [],
       enableHotReload = process.env.NODE_ENV === 'development',
+      lazyLoading = true, // ⚡ Lazy loading enabled by default
+      preloadCommands: preloadCommandsList = [],
       rateLimiting = { enabled: true, defaultLimit: 5, defaultWindow: 60 },
       performance = { enabled: true, trackMemory: true }
     } = options;
@@ -103,6 +124,9 @@ export class ClientHandler {
       rateLimiting.defaultWindow
     );
     this._hotReloadManager = new HotReloadManager(enableHotReload);
+    
+    // Set the ClientHandler reference in ComponentManager after construction
+    this._componentManager.setClientHandler(this);
 
     if (this._validationsPath && !commandsPath) {
       throw new Error(
@@ -112,6 +136,8 @@ export class ClientHandler {
   }
 
   private async _initialize(): Promise<void> {
+    const startTime = Date.now();
+    
     try {
       const figletData: string | undefined = await new Promise((resolve, reject) => {
         figlet("XtonCore", (err, data) => {
@@ -132,11 +158,30 @@ export class ClientHandler {
       this._logger.warn("Could not display startup banner.");
     }
 
-    // Initialize all managers
-    await this._initializeManagers();
+    // ⚡ PARALLEL LOADING: Load everything at once!
+    const initTasks: Promise<void>[] = [];
 
+    // Initialize managers (components)
+    initTasks.push(this._initializeManagers());
+
+    // Initialize commands
     if (this._commandsPath) {
-      await this._commandsInit();
+      initTasks.push(this._commandsInit());
+    }
+
+    // Initialize events
+    if (this._eventsPath) {
+      initTasks.push(this._eventsInit());
+    }
+
+    // Wait for all initialization tasks to complete in parallel
+    await Promise.all(initTasks);
+
+    const loadTime = Date.now() - startTime;
+    this._logger.info(`⚡ Parallel loading completed in ${loadTime}ms`);
+
+    // Setup command handlers after commands are loaded
+    if (this._commandsPath) {
       this._client.once('ready', async () => {
         this._registerSlashCommands();
         if (this._validationsPath) {
@@ -148,22 +193,20 @@ export class ClientHandler {
       });
     }
 
-    if (this._eventsPath) {
-      await this._eventsInit();
-    }
-
     // Setup hot reload if enabled
     this._setupHotReload();
   }
 
   private async _initializeManagers(): Promise<void> {
     try {
+      const startTime = Date.now();
       // Initialize component manager
       if (this._componentsPath) {
         await this._componentManager.initialize();
       }
 
-      this._logger.info("Enhanced managers initialized successfully");
+      const loadTime = Date.now() - startTime;
+      this._logger.debug(`Enhanced managers initialized in ${loadTime}ms`);
     } catch (error) {
       this._logger.error("Error initializing managers:", error);
     }
@@ -200,7 +243,26 @@ export class ClientHandler {
   }
 
   private async _commandsInit(): Promise<void> {
-    const commandArray = await buildCommandTree(this._commandsPath);
+    const startTime = Date.now();
+    const lazyLoading = this._options.lazyLoading !== false; // Default true
+    
+    let commandArray: any[];
+    
+    if (lazyLoading) {
+      // ⚡ LAZY LOADING: Load only metadata
+      this._logger.info('⚡ Using lazy loading for commands...');
+      commandArray = await buildCommandTreeLazy(this._commandsPath);
+      
+      // Preload specific commands if specified
+      if (this._options.preloadCommands && this._options.preloadCommands.length > 0) {
+        await preloadCommands(commandArray as LazyCommand[], this._options.preloadCommands);
+      }
+    } else {
+      // Traditional loading: Load everything
+      this._logger.info('Loading all commands (lazy loading disabled)...');
+      commandArray = await buildCommandTree(this._commandsPath);
+    }
+    
     this._commands = commandArray;
     this._commandsMap.clear();
     for (const cmd of commandArray) {
@@ -208,6 +270,10 @@ export class ClientHandler {
         this._commandsMap.set(cmd.name, cmd);
       }
     }
+    
+    const loadTime = Date.now() - startTime;
+    const loadType = lazyLoading ? 'metadata' : 'commands';
+    this._logger.debug(`Loaded ${commandArray.length} ${loadType} in ${loadTime}ms`);
   }
 
   private _registerSlashCommands(): void {
@@ -220,8 +286,10 @@ export class ClientHandler {
 
   private async _eventsInit(): Promise<void> {
     if (!this._eventsPath) return;
-    const eventPaths = await getFolderPaths(this._eventsPath); // สมมติว่า getFolderPaths คืนค่าถูกต้อง
+    const startTime = Date.now();
+    const eventPaths = await getFolderPaths(this._eventsPath);
 
+    let totalEvents = 0;
     for (const eventPath of eventPaths) {
       const eventName = path.basename(eventPath);
       const eventFuncPaths = await getFilePaths(eventPath, true);
@@ -229,12 +297,14 @@ export class ClientHandler {
 
       if (!eventName) continue;
 
+      totalEvents += eventFuncPaths.length;
+
       this._client.on(eventName, async (...args) => {
         for (const eventFuncPath of eventFuncPaths) {
           try {
             const absolutePath = path.resolve(eventFuncPath);
-            const fileURL = pathToFileURL(absolutePath).href; // <--- แก้ไขตรงนี้
-            const eventModule = await import(fileURL);
+            // Use require for CommonJS compatibility with ts-node
+            const eventModule = require(absolutePath);
             const eventFunc = eventModule.default || eventModule;
 
             if (typeof eventFunc === 'function') {
@@ -253,6 +323,8 @@ export class ClientHandler {
         }
       });
     }
+    const loadTime = Date.now() - startTime;
+    this._logger.debug(`Loaded ${totalEvents} event handlers in ${loadTime}ms`);
   }
 
   private async _validationsInit(): Promise<void> {
@@ -341,7 +413,18 @@ export class ClientHandler {
           if (!canRun) return;
         }
 
+        // ⚡ LAZY LOADING: Load command function if not loaded yet
+        const lazyCommand = command as unknown as LazyCommand;
+        if (lazyCommand._loaded === false && lazyCommand._filePath) {
+          this._logger.debug(`⚡ Lazy loading function for "${command.name}"...`);
+          await loadCommandFunction(lazyCommand);
+        }
+
         // Execute command
+        if (!command.run) {
+          throw new Error(`Command "${command.name}" has no run function`);
+        }
+        
         await command.run({
           interaction,
           client: this._client,
@@ -356,7 +439,7 @@ export class ClientHandler {
         // Record performance metrics
         const executionTime = Date.now() - startTime;
         this._performanceManager.recordCommandExecution(command.name, executionTime);
-        this._logger.command(command.name, userId, guildId);
+        this._logger.command(command.name, userId, guildId ?? undefined);
 
       } catch (error) {
         const executionTime = Date.now() - startTime;
@@ -438,10 +521,12 @@ export class ClientHandler {
       throw new Error('No commands path configured');
     }
 
+    const startTime = Date.now();
     this._logger.info('Manually reloading commands...');
     await this._commandsInit();
     this._registerSlashCommands();
-    this._logger.info('Commands reloaded successfully');
+    const loadTime = Date.now() - startTime;
+    this._logger.info(`Commands reloaded successfully in ${loadTime}ms`);
   }
 
   public async reloadComponents(): Promise<void> {
@@ -449,9 +534,108 @@ export class ClientHandler {
       throw new Error('No components path configured');
     }
 
+    const startTime = Date.now();
     this._logger.info('Manually reloading components...');
     await this._componentManager.initialize();
-    this._logger.info('Components reloaded successfully');
+    const loadTime = Date.now() - startTime;
+    this._logger.info(`Components reloaded successfully in ${loadTime}ms`);
+  }
+
+  /**
+   * ⚡ Reload everything in parallel for maximum speed
+   */
+  public async reloadAll(): Promise<void> {
+    const startTime = Date.now();
+    this._logger.info('⚡ Reloading all modules in parallel...');
+
+    const reloadTasks: Promise<void>[] = [];
+
+    // Reload commands
+    if (this._commandsPath) {
+      reloadTasks.push(
+        this._commandsInit().then(() => {
+          this._registerSlashCommands();
+        })
+      );
+    }
+
+    // Reload components
+    if (this._componentsPath) {
+      reloadTasks.push(this._componentManager.initialize());
+    }
+
+    // Reload events (note: may require restart for full effect)
+    if (this._eventsPath) {
+      reloadTasks.push(this._eventsInit());
+    }
+
+    // Wait for all reloads to complete
+    await Promise.all(reloadTasks);
+
+    const loadTime = Date.now() - startTime;
+    this._logger.info(`⚡ All modules reloaded successfully in ${loadTime}ms`);
+  }
+
+  /**
+   * ⚡ Preload specific commands (useful for frequently used commands)
+   * @param commandNames - Array of command names to preload
+   */
+  public async preloadCommands(commandNames: string[]): Promise<void> {
+    const startTime = Date.now();
+    this._logger.info(`⚡ Preloading ${commandNames.length} commands...`);
+
+    const lazyCommands = this._commands.filter(cmd => {
+      const lazyCm = cmd as unknown as LazyCommand;
+      return lazyCm._loaded === false && commandNames.includes(cmd.name);
+    }) as unknown as LazyCommand[];
+
+    await preloadCommands(lazyCommands, commandNames);
+
+    const loadTime = Date.now() - startTime;
+    this._logger.info(`⚡ Preloaded ${commandNames.length} commands in ${loadTime}ms`);
+  }
+
+  /**
+   * ⚡ Preload all commands (useful for production)
+   */
+  public async preloadAllCommands(): Promise<void> {
+    const startTime = Date.now();
+    this._logger.info('⚡ Preloading all commands...');
+
+    const lazyCommands = this._commands.filter(cmd => {
+      const lazyCmd = cmd as unknown as LazyCommand;
+      return lazyCmd._loaded === false;
+    }) as unknown as LazyCommand[];
+
+    if (lazyCommands.length === 0) {
+      this._logger.info('All commands already loaded');
+      return;
+    }
+
+    await preloadAllCommands(lazyCommands);
+
+    const loadTime = Date.now() - startTime;
+    this._logger.info(`⚡ Preloaded all ${lazyCommands.length} commands in ${loadTime}ms`);
+  }
+
+  /**
+   * Get lazy loading statistics
+   */
+  public getLazyLoadingStats(): {
+    total: number;
+    loaded: number;
+    unloaded: number;
+    percentage: number;
+  } {
+    const total = this._commands.length;
+    const loaded = this._commands.filter(cmd => {
+      const lazyCmd = cmd as unknown as LazyCommand;
+      return lazyCmd._loaded !== false;
+    }).length;
+    const unloaded = total - loaded;
+    const percentage = total > 0 ? Math.round((loaded / total) * 100) : 0;
+
+    return { total, loaded, unloaded, percentage };
   }
 
   public getStats(): {

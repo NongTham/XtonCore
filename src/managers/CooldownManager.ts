@@ -3,7 +3,7 @@ import { Clientlogger } from '../logger';
 
 export class CooldownManager {
   private cooldowns: Map<string, CooldownData>;
-  private cleanupInterval: NodeJS.Timeout;
+  private cleanupInterval!: NodeJS.Timeout;
 
   constructor() {
     this.cooldowns = new Map();

@@ -11,8 +11,8 @@ export async function buildCommandTree(commandsDir?: string): Promise<any[]> {
   for (const commandFilePath of commandFilePaths) {
     try {
       const absolutePath = path.resolve(commandFilePath);
-      const fileURL = pathToFileURL(absolutePath).href;
-      const commandModule = await import(fileURL);
+      // Use require for CommonJS compatibility with ts-node
+      const commandModule = require(absolutePath);
 
       let { data, run, deleted, ...rest } = commandModule.default || commandModule;
 

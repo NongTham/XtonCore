@@ -1,16 +1,25 @@
-import { 
-  SlashCommandBuilder, 
-  ContextMenuCommandBuilder, 
+import {
+  SlashCommandBuilder,
+  SlashCommandOptionsOnlyBuilder,
+  SlashCommandSubcommandsOnlyBuilder,
+  ContextMenuCommandBuilder,
   ApplicationCommandType,
   PermissionFlagsBits,
-  ChannelType
-} from 'discord.js';
+  ChannelType,
+} from "discord.js";
+
+type SlashCommandBuilderType =
+  | SlashCommandBuilder
+  | SlashCommandOptionsOnlyBuilder
+  | SlashCommandSubcommandsOnlyBuilder
+  | Omit<SlashCommandBuilder, "addSubcommand" | "addSubcommandGroup">;
 
 export class CommandBuilder {
-  public static createSlashCommand(name: string, description: string): SlashCommandBuilder {
-    return new SlashCommandBuilder()
-      .setName(name)
-      .setDescription(description);
+  public static createSlashCommand(
+    name: string,
+    description: string
+  ): SlashCommandBuilder {
+    return new SlashCommandBuilder().setName(name).setDescription(description);
   }
 
   public static createUserContextMenu(name: string): ContextMenuCommandBuilder {
@@ -19,19 +28,24 @@ export class CommandBuilder {
       .setType(ApplicationCommandType.User);
   }
 
-  public static createMessageContextMenu(name: string): ContextMenuCommandBuilder {
+  public static createMessageContextMenu(
+    name: string
+  ): ContextMenuCommandBuilder {
     return new ContextMenuCommandBuilder()
       .setName(name)
       .setType(ApplicationCommandType.Message);
   }
 
-  public static addCommonOptions(builder: SlashCommandBuilder, options: {
-    guildOnly?: boolean;
-    ownerOnly?: boolean;
-    nsfw?: boolean;
-    cooldown?: number;
-    permissions?: bigint[];
-  } = {}): SlashCommandBuilder {
+  public static addCommonOptions(
+    builder: SlashCommandBuilder,
+    options: {
+      guildOnly?: boolean;
+      ownerOnly?: boolean;
+      nsfw?: boolean;
+      cooldown?: number;
+      permissions?: bigint[];
+    } = {}
+  ): SlashCommandBuilder {
     const { guildOnly = false, ownerOnly = false, nsfw = false } = options;
 
     if (guildOnly) {
@@ -49,16 +63,14 @@ export class CommandBuilder {
     builder: SlashCommandBuilder,
     name: string,
     description: string
-  ): SlashCommandBuilder {
-    return builder.addSubcommandGroup(group =>
-      group
-        .setName(name)
-        .setDescription(description)
+  ): SlashCommandSubcommandsOnlyBuilder {
+    return builder.addSubcommandGroup((group) =>
+      group.setName(name).setDescription(description)
     );
   }
 
   public static addStringOption(
-    builder: SlashCommandBuilder,
+    builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder,
     name: string,
     description: string,
     options: {
@@ -68,22 +80,22 @@ export class CommandBuilder {
       maxLength?: number;
       minLength?: number;
     } = {}
-  ): SlashCommandBuilder {
-    return builder.addStringOption(option => {
+  ): SlashCommandOptionsOnlyBuilder {
+    return builder.addStringOption((option) => {
       option.setName(name).setDescription(description);
-      
+
       if (options.required) option.setRequired(true);
       if (options.choices) option.addChoices(...options.choices);
       if (options.autocomplete) option.setAutocomplete(true);
       if (options.maxLength) option.setMaxLength(options.maxLength);
       if (options.minLength) option.setMinLength(options.minLength);
-      
+
       return option;
-    });
+    }) as SlashCommandOptionsOnlyBuilder;
   }
 
   public static addIntegerOption(
-    builder: SlashCommandBuilder,
+    builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder,
     name: string,
     description: string,
     options: {
@@ -93,93 +105,82 @@ export class CommandBuilder {
       maxValue?: number;
       minValue?: number;
     } = {}
-  ): SlashCommandBuilder {
-    return builder.addIntegerOption(option => {
+  ): SlashCommandOptionsOnlyBuilder {
+    return builder.addIntegerOption((option) => {
       option.setName(name).setDescription(description);
-      
+
       if (options.required) option.setRequired(true);
       if (options.choices) option.addChoices(...options.choices);
       if (options.autocomplete) option.setAutocomplete(true);
       if (options.maxValue) option.setMaxValue(options.maxValue);
       if (options.minValue) option.setMinValue(options.minValue);
-      
+
       return option;
-    });
+    }) as SlashCommandOptionsOnlyBuilder;
   }
 
   public static addBooleanOption(
-    builder: SlashCommandBuilder,
+    builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder,
     name: string,
     description: string,
     required: boolean = false
-  ): SlashCommandBuilder {
-    return builder.addBooleanOption(option =>
-      option
-        .setName(name)
-        .setDescription(description)
-        .setRequired(required)
-    );
+  ): SlashCommandOptionsOnlyBuilder {
+    return builder.addBooleanOption((option) =>
+      option.setName(name).setDescription(description).setRequired(required)
+    ) as SlashCommandOptionsOnlyBuilder;
   }
 
   public static addUserOption(
-    builder: SlashCommandBuilder,
+    builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder,
     name: string,
     description: string,
     required: boolean = false
-  ): SlashCommandBuilder {
-    return builder.addUserOption(option =>
-      option
-        .setName(name)
-        .setDescription(description)
-        .setRequired(required)
-    );
+  ): SlashCommandOptionsOnlyBuilder {
+    return builder.addUserOption((option) =>
+      option.setName(name).setDescription(description).setRequired(required)
+    ) as SlashCommandOptionsOnlyBuilder;
   }
 
   public static addChannelOption(
-    builder: SlashCommandBuilder,
+    builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder,
     name: string,
     description: string,
     options: {
       required?: boolean;
       channelTypes?: ChannelType[];
     } = {}
-  ): SlashCommandBuilder {
-    return builder.addChannelOption(option => {
+  ): SlashCommandOptionsOnlyBuilder {
+    return builder.addChannelOption((option) => {
       option.setName(name).setDescription(description);
-      
+
       if (options.required) option.setRequired(true);
-      if (options.channelTypes) option.addChannelTypes(...options.channelTypes);
-      
+      if (options.channelTypes)
+        option.addChannelTypes(...(options.channelTypes as any));
+
       return option;
-    });
+    }) as SlashCommandOptionsOnlyBuilder;
   }
 
   public static addRoleOption(
-    builder: SlashCommandBuilder,
+    builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder,
     name: string,
     description: string,
     required: boolean = false
-  ): SlashCommandBuilder {
-    return builder.addRoleOption(option =>
-      option
-        .setName(name)
-        .setDescription(description)
-        .setRequired(required)
-    );
+  ): SlashCommandOptionsOnlyBuilder {
+    return builder.addRoleOption((option) =>
+      option.setName(name).setDescription(description).setRequired(required)
+    ) as SlashCommandOptionsOnlyBuilder;
   }
 
   public static addAttachmentOption(
-    builder: SlashCommandBuilder,
+    builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder,
     name: string,
     description: string,
     required: boolean = false
-  ): SlashCommandBuilder {
-    return builder.addAttachmentOption(option =>
-      option
-        .setName(name)
-        .setDescription(description)
-        .setRequired(required)
-    );
+  ): SlashCommandOptionsOnlyBuilder {
+    return builder.addAttachmentOption((option) =>
+      option.setName(name).setDescription(description).setRequired(required)
+    ) as SlashCommandOptionsOnlyBuilder;
   }
 
   // Predefined permission sets
@@ -188,7 +189,7 @@ export class CommandBuilder {
     MODERATOR: [
       PermissionFlagsBits.ManageMessages,
       PermissionFlagsBits.ManageRoles,
-      PermissionFlagsBits.KickMembers
+      PermissionFlagsBits.KickMembers,
     ],
     MANAGE_GUILD: [PermissionFlagsBits.ManageGuild],
     MANAGE_CHANNELS: [PermissionFlagsBits.ManageChannels],
@@ -197,7 +198,7 @@ export class CommandBuilder {
     KICK_MEMBERS: [PermissionFlagsBits.KickMembers],
     MANAGE_MESSAGES: [PermissionFlagsBits.ManageMessages],
     SEND_MESSAGES: [PermissionFlagsBits.SendMessages],
-    VIEW_CHANNEL: [PermissionFlagsBits.ViewChannel]
+    VIEW_CHANNEL: [PermissionFlagsBits.ViewChannel],
   };
 
   // Common channel types
@@ -205,17 +206,20 @@ export class CommandBuilder {
     TEXT: [ChannelType.GuildText],
     VOICE: [ChannelType.GuildVoice],
     CATEGORY: [ChannelType.GuildCategory],
-    NEWS: [ChannelType.GuildNews],
+    ANNOUNCEMENT: [ChannelType.GuildAnnouncement],
     STAGE: [ChannelType.GuildStageVoice],
     FORUM: [ChannelType.GuildForum],
-    TEXT_AND_NEWS: [ChannelType.GuildText, ChannelType.GuildNews],
+    TEXT_AND_ANNOUNCEMENT: [
+      ChannelType.GuildText,
+      ChannelType.GuildAnnouncement,
+    ],
     ALL_GUILD: [
       ChannelType.GuildText,
       ChannelType.GuildVoice,
       ChannelType.GuildCategory,
-      ChannelType.GuildNews,
+      ChannelType.GuildAnnouncement,
       ChannelType.GuildStageVoice,
-      ChannelType.GuildForum
-    ]
+      ChannelType.GuildForum,
+    ],
   };
 }

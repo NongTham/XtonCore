@@ -10,7 +10,7 @@ export class RateLimiter {
   private limits: Map<string, RateLimitData>;
   private defaultLimit: number;
   private defaultWindow: number; // in seconds
-  private cleanupInterval: NodeJS.Timeout;
+  private cleanupInterval!: NodeJS.Timeout;
 
   constructor(defaultLimit: number = 5, defaultWindow: number = 60) {
     this.limits = new Map();

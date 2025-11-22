@@ -236,17 +236,18 @@ export class ComponentHelpers {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons);
   }
 
-  public static disableAllComponents<T extends any>(
+  public static disableAllComponents<T extends ButtonBuilder | StringSelectMenuBuilder>(
     components: ActionRowBuilder<T>[]
   ): ActionRowBuilder<T>[] {
     return components.map(row => {
       const newRow = new ActionRowBuilder<T>();
-      newRow.components = row.components.map(component => {
-        if ('setDisabled' in component) {
-          (component as any).setDisabled(true);
+      const disabledComponents = row.components.map(component => {
+        if ('setDisabled' in component && typeof component.setDisabled === 'function') {
+          return component.setDisabled(true) as T;
         }
         return component;
       });
+      newRow.addComponents(...disabledComponents);
       return newRow;
     });
   }
