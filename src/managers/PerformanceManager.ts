@@ -8,6 +8,8 @@ export class PerformanceManager {
   private commandStats: Map<string, CommandStats>;
   private startTime: number;
   private statsFile: string;
+  private _memoryInterval!: NodeJS.Timeout;
+  private _saveInterval!: NodeJS.Timeout;
 
   constructor() {
     this.startTime = Date.now();
@@ -37,14 +39,14 @@ export class PerformanceManager {
     try {
       const data = await fs.readFile(this.statsFile, 'utf-8');
       const savedStats = JSON.parse(data);
-      
+
       for (const [name, stats] of Object.entries(savedStats)) {
         this.commandStats.set(name, {
           ...(stats as CommandStats),
           lastUsed: new Date((stats as any).lastUsed)
         });
       }
-      
+
       Clientlogger.info(`Loaded stats for ${this.commandStats.size} commands`);
     } catch (error) {
       Clientlogger.info('No existing stats file found, starting fresh');
@@ -61,28 +63,30 @@ export class PerformanceManager {
   }
 
   private startMemoryMonitoring(): void {
-    setInterval(() => {
+    this._memoryInterval = setInterval(() => {
       const memUsage = process.memoryUsage().heapUsed / 1024 / 1024;
       this.metrics.memoryUsage.push(memUsage);
-      
+
       // Keep only last 100 readings
       if (this.metrics.memoryUsage.length > 100) {
         this.metrics.memoryUsage.shift();
       }
-      
+
       this.metrics.uptime = Date.now() - this.startTime;
     }, 30000); // Every 30 seconds
+    this._memoryInterval.unref();
 
     // Save stats every 5 minutes
-    setInterval(() => {
+    this._saveInterval = setInterval(() => {
       this.saveStats();
     }, 300000);
+    this._saveInterval.unref();
   }
 
   public recordCommandExecution(commandName: string, executionTime: number): void {
     // Update metrics
     this.metrics.commandExecutions.set(
-      commandName, 
+      commandName,
       (this.metrics.commandExecutions.get(commandName) || 0) + 1
     );
 
@@ -103,7 +107,7 @@ export class PerformanceManager {
     stats.uses++;
     stats.lastUsed = new Date();
     stats.averageExecutionTime = times.reduce((a, b) => a + b, 0) / times.length;
-    
+
     this.commandStats.set(commandName, stats);
   }
 
@@ -153,12 +157,22 @@ export class PerformanceManager {
     let report = `📊 **Performance Report**\n`;
     report += `⏱️ Uptime: ${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m\n`;
     report += `💾 Memory: ${memory.current.toFixed(2)}MB (avg: ${memory.average.toFixed(2)}MB, peak: ${memory.peak.toFixed(2)}MB)\n\n`;
-    
+
     report += `🏆 **Top Commands:**\n`;
     topCommands.forEach((cmd, i) => {
       report += `${i + 1}. ${cmd.name}: ${cmd.uses} uses (${cmd.averageExecutionTime.toFixed(2)}ms avg)\n`;
     });
 
     return report;
+  }
+
+  public destroy(): void {
+    if (this._memoryInterval) {
+      clearInterval(this._memoryInterval);
+    }
+    if (this._saveInterval) {
+      clearInterval(this._saveInterval);
+    }
+    this.commandStats.clear();
   }
 }

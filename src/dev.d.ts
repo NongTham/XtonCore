@@ -11,18 +11,46 @@ import {
   PermissionResolvable,
 } from "discord.js";
 
+import { PerformanceManager } from './managers/PerformanceManager';
+import { CooldownManager } from './managers/CooldownManager';
+import { ComponentManager } from './managers/ComponentManager';
+import { PermissionManager } from './managers/PermissionManager';
+import { RateLimiter } from './managers/RateLimiter';
+import { HotReloadManager } from './managers/HotReloadManager';
+import { MiddlewareManager } from './managers/MiddlewareManager';
+import { JobManager } from './managers/JobManager';
+import { LanguageManager } from './managers/LanguageManager';
+
+export interface MiddlewareContext {
+  interaction: ChatInputCommandInteraction;
+  command: LocalCommand;
+  client: Client;
+  handler: ClientHandler;
+  /** Custom state to pass data between middlewares */
+  state: Record<string, any>;
+}
+
+export type NextFunction = (error?: Error) => void | Promise<void>;
+
+export interface MiddlewareFunction {
+  (context: MiddlewareContext, next: NextFunction): Promise<void> | void;
+}
+
 // Forward declaration for circular dependency
 export interface ClientHandler {
   readonly commands: LocalCommand[];
   readonly commandMap: ReadonlyMap<string, LocalCommand>;
   readonly client: Client;
-  readonly performanceManager: any;
-  readonly cooldownManager: any;
-  readonly componentManager: any;
-  readonly permissionManager: any;
-  readonly rateLimiter: any;
-  readonly hotReloadManager: any;
-  
+  readonly performanceManager: PerformanceManager;
+  readonly cooldownManager: CooldownManager;
+  readonly componentManager: ComponentManager;
+  readonly permissionManager: PermissionManager;
+  readonly rateLimiter: RateLimiter;
+  readonly hotReloadManager: HotReloadManager;
+  readonly middlewareManager: MiddlewareManager;
+  readonly jobManager?: JobManager;
+  readonly languageManager?: LanguageManager;
+
   // Methods
   reloadCommands(): Promise<void>;
   reloadComponents(): Promise<void>;
@@ -35,16 +63,16 @@ export interface ClientHandler {
     unloaded: number;
     percentage: number;
   };
-  getStats(): {
+  getStats(): Promise<{
     commands: number;
-    performance: any;
+    performance: ReturnType<PerformanceManager['getPerformanceMetrics']>;
     cooldowns: number;
     components: number;
-    permissions: any;
-    rateLimiter: any;
-    hotReload: any;
-  };
-  generateReport(): string;
+    permissions: ReturnType<PermissionManager['getStats']>;
+    rateLimiter: Awaited<ReturnType<RateLimiter['getStats']>>;
+    hotReload: ReturnType<HotReloadManager['getStats']>;
+  }>;
+  generateReport(): Promise<string>;
   destroy(): void;
 }
 
@@ -101,9 +129,9 @@ export interface CommandRunOptions<TCustomData = Record<string, any>> {
  */
 export interface ComponentHandler<
   TInteraction =
-    | ButtonInteraction
-    | SelectMenuInteraction
-    | ModalSubmitInteraction
+  | ButtonInteraction
+  | SelectMenuInteraction
+  | ModalSubmitInteraction
 > {
   /** Custom ID or regex pattern to match */
   customId: string | RegExp;
@@ -196,4 +224,18 @@ export interface RateLimitResult {
   resetTime: number;
   /** Whether the identifier is blocked */
   blocked: boolean;
+}
+
+/**
+ * Scheduled cron job
+ */
+export interface Job {
+  /** Name of the job */
+  name: string;
+  /** Cron expression (e.g. '* * * * *') */
+  cron: string;
+  /** Whether the job is enabled by default */
+  enabled?: boolean;
+  /** Execution function */
+  run: (client: Client, handler: ClientHandler) => Promise<void> | void;
 }

@@ -2,9 +2,25 @@
 
 All notable changes to XtonCore will be documented in this file.
 
-## [2.1.0] - 2025-11-22
+## [3.0.0] - 2026-03-11
 
-### ⚡ Performance Improvements
+### 🚀 Major Release - Production Framework Upgrade
+
+This massive release transforms XtonCore from a simple command handler into a full-fledged production-ready framework for Discord.js!
+
+#### ✨ 5 Major New Features
+- **💾 Persistent Storage Architecture:** Replaced hardcoded memory Maps in Rate Limiting and Cooldown managers with a new `IStorageAdapter` interface. Now you can easily plug in Redis, MongoDB, or any external database to ensure rate limits and cooldowns persist across bot restarts.
+- **🔌 Middleware Pipeline (Express-style):** Introduced `MiddlewareManager` allowing you to intercept and validate interactions sequentially before a command ever runs. Easily stack custom authentications, blocks, or state injections (`ctx.next()`).
+- **⏱️ Job / Cron Manager:** Built-in scheduled task executor (`node-cron` wrapper). Automatically loads jobs from a designated `jobs/` directory, allowing you to easily schedule recurring actions safely while tracking stats.
+- **🌐 Localization (i18n):** Robust `LanguageManager` for handling multi-language bots with ease. Supports loading JSON translation files, parameter substitution (e.g., `Hello {{user}}`), nested keys, and language fallbacks.
+- **📑 Automated Pagination:** A seamless `PaginationBuilder` utility that takes an array of embeds and automatically handles button building, rendering, page tracking, active/disable states, strict authorization, and timeout cleanups.
+
+#### 🧪 Testing
+- Added **32 new unit tests** specifically for the v3.0.0 features, achieving complete test coverage for the new managers and components.
+
+---
+
+## [2.1.0] - 2025-11-22
 
 #### Lazy Loading System
 - **80% faster startup** - Commands load on-demand instead of all at once

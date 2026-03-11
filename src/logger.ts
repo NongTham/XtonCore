@@ -4,9 +4,16 @@ import path from 'path'
 import gradient from 'gradient-string';
 
 const logDir = 'Logs';
-// Create the log directory if it does not exist
-if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
+
+// Lazy directory creation — only create when first log is written
+let logDirEnsured = false;
+function ensureLogDir(): void {
+    if (!logDirEnsured) {
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+        logDirEnsured = true;
+    }
 }
 
 const filename = path.join(logDir, `Client.log`);
@@ -47,6 +54,7 @@ export const Clientlogger = createLogger({
         // Main log file
         new transports.File({
             filename,
+            lazy: true,
             format: format.combine(
                 format.json(),
                 format.timestamp()
@@ -59,6 +67,7 @@ export const Clientlogger = createLogger({
         new transports.File({
             filename: errorFilename,
             level: 'error',
+            lazy: true,
             format: format.combine(
                 format.json(),
                 format.timestamp()
@@ -72,6 +81,7 @@ export const Clientlogger = createLogger({
             new transports.File({
                 filename: debugFilename,
                 level: 'debug',
+                lazy: true,
                 format: format.combine(
                     format.json(),
                     format.timestamp()
@@ -109,7 +119,7 @@ export class EnhancedLogger {
         this.logger.info(this.formatMessage(message, meta));
     }
 
-    public error(message: string, error?: any, p0?: string, reason?: unknown): void {
+    public error(message: string, error?: any): void {
         if (error instanceof Error) {
             this.logger.error(this.formatMessage(message), { error: error.message, stack: error.stack });
         } else {

@@ -1,6 +1,6 @@
-import { 
-  ChatInputCommandInteraction, 
-  PermissionResolvable, 
+import {
+  ChatInputCommandInteraction,
+  PermissionResolvable,
   GuildMember,
   PermissionsBitField
 } from 'discord.js';
@@ -12,6 +12,7 @@ export class PermissionManager {
   private blacklistedUsers: Set<string>;
   private blacklistedGuilds: Set<string>;
   private permissionCache: Map<string, { permissions: string[]; expiresAt: number }>;
+  private cleanupInterval!: NodeJS.Timeout;
 
   constructor(ownerIds: string[] = []) {
     this.ownerIds = new Set(ownerIds);
@@ -22,7 +23,7 @@ export class PermissionManager {
   }
 
   private startCacheCleanup(): void {
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       const now = Date.now();
       for (const [key, data] of this.permissionCache.entries()) {
         if (data.expiresAt <= now) {
@@ -30,6 +31,7 @@ export class PermissionManager {
         }
       }
     }, 300000); // Clean every 5 minutes
+    this.cleanupInterval.unref();
   }
 
   public addOwner(userId: string): void {
@@ -130,16 +132,16 @@ export class PermissionManager {
       // Check cache first
       const cacheKey = `${member.id}-${member.guild.id}`;
       const cached = this.permissionCache.get(cacheKey);
-      
+
       let memberPermissions: string[];
-      
+
       if (cached && cached.expiresAt > Date.now()) {
         memberPermissions = cached.permissions;
       } else {
         // Refresh permissions
         await member.fetch();
         memberPermissions = member.permissions.toArray();
-        
+
         // Cache for 10 minutes
         this.permissionCache.set(cacheKey, {
           permissions: memberPermissions,
@@ -172,10 +174,10 @@ export class PermissionManager {
 
   public getUserPermissions(userId: string, guildId?: string): string[] {
     if (!guildId) return [];
-    
+
     const cacheKey = `${userId}-${guildId}`;
     const cached = this.permissionCache.get(cacheKey);
-    
+
     return cached && cached.expiresAt > Date.now() ? cached.permissions : [];
   }
 
@@ -200,5 +202,12 @@ export class PermissionManager {
       blacklistedGuilds: this.blacklistedGuilds.size,
       cachedPermissions: this.permissionCache.size
     };
+  }
+
+  public destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    this.permissionCache.clear();
   }
 }

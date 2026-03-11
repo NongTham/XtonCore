@@ -12,6 +12,10 @@ import { ComponentManager } from './managers/ComponentManager';
 import { PermissionManager } from './managers/PermissionManager';
 import { RateLimiter } from './managers/RateLimiter';
 import { HotReloadManager } from './managers/HotReloadManager';
+import { MiddlewareManager } from './managers/MiddlewareManager';
+import { JobManager } from './managers/JobManager';
+import { LanguageManager } from './managers/LanguageManager';
+import { MiddlewareContext } from './dev';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import path from 'path';
@@ -24,9 +28,13 @@ export { ComponentManager } from './managers/ComponentManager';
 export { PermissionManager } from './managers/PermissionManager';
 export { RateLimiter } from './managers/RateLimiter';
 export { HotReloadManager } from './managers/HotReloadManager';
+export { MiddlewareManager } from './managers/MiddlewareManager';
+export { JobManager } from './managers/JobManager';
+export { LanguageManager } from './managers/LanguageManager';
 export { EnhancedEmbedBuilder } from './utils/EmbedBuilder';
 export { ComponentHelpers } from './utils/ComponentHelpers';
 export { InputSanitizer } from './utils/InputSanitizer';
+export { PaginationBuilder } from './utils/PaginationBuilder';
 export { CommandBuilder } from './utils/CommandBuilder';
 export { Logger, Clientlogger } from './logger';
 
@@ -36,6 +44,9 @@ interface ClientHandlerOptions {
   eventsPath?: string;
   validationsPath?: string;
   componentsPath?: string;
+  jobsPath?: string;
+  localesPath?: string;
+  defaultLocale?: string;
   guild?: string;
   ownerIds?: string[];
   enableHotReload?: boolean;
@@ -74,6 +85,9 @@ export class ClientHandler {
   private _permissionManager: PermissionManager;
   private _rateLimiter: RateLimiter;
   private _hotReloadManager: HotReloadManager;
+  private _middlewareManager: MiddlewareManager;
+  private _jobManager?: JobManager;
+  private _languageManager?: LanguageManager;
   private _logger: typeof Logger;
 
   public static async create(options: ClientHandlerOptions): Promise<ClientHandler> {
@@ -89,6 +103,9 @@ export class ClientHandler {
       eventsPath,
       validationsPath,
       componentsPath,
+      jobsPath,
+      localesPath,
+      defaultLocale,
       guild,
       ownerIds = [],
       enableHotReload = process.env.NODE_ENV === 'development',
@@ -124,7 +141,16 @@ export class ClientHandler {
       rateLimiting.defaultWindow
     );
     this._hotReloadManager = new HotReloadManager(enableHotReload);
-    
+    this._middlewareManager = new MiddlewareManager();
+
+    if (jobsPath) {
+      this._jobManager = new JobManager(jobsPath, client, this);
+    }
+
+    if (localesPath) {
+      this._languageManager = new LanguageManager({ localesPath, defaultLocale });
+    }
+
     // Set the ClientHandler reference in ComponentManager after construction
     this._componentManager.setClientHandler(this);
 
@@ -137,7 +163,7 @@ export class ClientHandler {
 
   private async _initialize(): Promise<void> {
     const startTime = Date.now();
-    
+
     try {
       const figletData: string | undefined = await new Promise((resolve, reject) => {
         figlet("XtonCore", (err, data) => {
@@ -172,6 +198,16 @@ export class ClientHandler {
     // Initialize events
     if (this._eventsPath) {
       initTasks.push(this._eventsInit());
+    }
+
+    // Initialize jobs
+    if (this._jobManager) {
+      initTasks.push(this._jobManager.loadJobs().then());
+    }
+
+    // Initialize languages
+    if (this._languageManager) {
+      initTasks.push(this._languageManager.loadLocales().then());
     }
 
     // Wait for all initialization tasks to complete in parallel
@@ -245,14 +281,14 @@ export class ClientHandler {
   private async _commandsInit(): Promise<void> {
     const startTime = Date.now();
     const lazyLoading = this._options.lazyLoading !== false; // Default true
-    
+
     let commandArray: any[];
-    
+
     if (lazyLoading) {
       // ⚡ LAZY LOADING: Load only metadata
       this._logger.info('⚡ Using lazy loading for commands...');
       commandArray = await buildCommandTreeLazy(this._commandsPath);
-      
+
       // Preload specific commands if specified
       if (this._options.preloadCommands && this._options.preloadCommands.length > 0) {
         await preloadCommands(commandArray as LazyCommand[], this._options.preloadCommands);
@@ -262,7 +298,7 @@ export class ClientHandler {
       this._logger.info('Loading all commands (lazy loading disabled)...');
       commandArray = await buildCommandTree(this._commandsPath);
     }
-    
+
     this._commands = commandArray;
     this._commandsMap.clear();
     for (const cmd of commandArray) {
@@ -270,7 +306,7 @@ export class ClientHandler {
         this._commandsMap.set(cmd.name, cmd);
       }
     }
-    
+
     const loadTime = Date.now() - startTime;
     const loadType = lazyLoading ? 'metadata' : 'commands';
     this._logger.debug(`Loaded ${commandArray.length} ${loadType} in ${loadTime}ms`);
@@ -367,9 +403,9 @@ export class ClientHandler {
       try {
         // Rate limiting check
         if (this._options.rateLimiting?.enabled) {
-          const rateLimit = this._rateLimiter.checkLimit(userId, 'command');
+          const rateLimit = await this._rateLimiter.checkLimit(userId, 'command');
           if (!rateLimit.allowed) {
-            const remainingTime = this._rateLimiter.getRemainingTime(userId, 'command');
+            const remainingTime = await this._rateLimiter.getRemainingTime(userId, 'command');
             await interaction.reply({
               content: `⏰ You're being rate limited! Please wait ${remainingTime} seconds before using commands again.`,
               ephemeral: true
@@ -390,8 +426,8 @@ export class ClientHandler {
 
         // Cooldown check
         if (command.cooldown && command.cooldown > 0) {
-          if (this._cooldownManager.isOnCooldown(userId, command.name)) {
-            const remainingTime = this._cooldownManager.getRemainingTime(userId, command.name);
+          if (await this._cooldownManager.isOnCooldown(userId, command.name)) {
+            const remainingTime = await this._cooldownManager.getRemainingTime(userId, command.name);
             await interaction.reply({
               content: `⏳ This command is on cooldown! Please wait ${remainingTime} seconds.`,
               ephemeral: true
@@ -413,6 +449,17 @@ export class ClientHandler {
           if (!canRun) return;
         }
 
+        // ⚡ MIDDLEWARE PIPELINE
+        const context: MiddlewareContext = {
+          interaction,
+          command,
+          client: this._client,
+          handler: this,
+          state: {}
+        };
+        const passedMiddleware = await this._middlewareManager.execute(context);
+        if (!passedMiddleware) return;
+
         // ⚡ LAZY LOADING: Load command function if not loaded yet
         const lazyCommand = command as unknown as LazyCommand;
         if (lazyCommand._loaded === false && lazyCommand._filePath) {
@@ -424,7 +471,7 @@ export class ClientHandler {
         if (!command.run) {
           throw new Error(`Command "${command.name}" has no run function`);
         }
-        
+
         await command.run({
           interaction,
           client: this._client,
@@ -433,7 +480,7 @@ export class ClientHandler {
 
         // Set cooldown after successful execution
         if (command.cooldown && command.cooldown > 0) {
-          this._cooldownManager.setCooldown(userId, command.name, command.cooldown);
+          await this._cooldownManager.setCooldown(userId, command.name, command.cooldown);
         }
 
         // Record performance metrics
@@ -513,6 +560,18 @@ export class ClientHandler {
 
   public get hotReloadManager(): HotReloadManager {
     return this._hotReloadManager;
+  }
+
+  public get middlewareManager(): MiddlewareManager {
+    return this._middlewareManager;
+  }
+
+  public get jobManager(): JobManager | undefined {
+    return this._jobManager;
+  }
+
+  public get languageManager(): LanguageManager | undefined {
+    return this._languageManager;
   }
 
   // Utility methods
@@ -638,7 +697,7 @@ export class ClientHandler {
     return { total, loaded, unloaded, percentage };
   }
 
-  public getStats(): {
+  public async getStats(): Promise<{
     commands: number;
     performance: any;
     cooldowns: number;
@@ -646,20 +705,20 @@ export class ClientHandler {
     permissions: any;
     rateLimiter: any;
     hotReload: any;
-  } {
+  }> {
     return {
       commands: this._commands.length,
       performance: this._performanceManager.getPerformanceMetrics(),
-      cooldowns: this._cooldownManager.getCooldownCount(),
+      cooldowns: await this._cooldownManager.getCooldownCount(),
       components: this._componentManager.getHandlerCount(),
       permissions: this._permissionManager.getStats(),
-      rateLimiter: this._rateLimiter.getStats(),
+      rateLimiter: await this._rateLimiter.getStats(),
       hotReload: this._hotReloadManager.getStats()
     };
   }
 
-  public generateReport(): string {
-    const stats = this.getStats();
+  public async generateReport(): Promise<string> {
+    const stats = await this.getStats();
     const performanceReport = this._performanceManager.generateReport();
 
     let report = `🚀 **XtonCore Enhanced Status Report**\n\n`;
@@ -681,6 +740,9 @@ export class ClientHandler {
     this._cooldownManager.destroy();
     this._rateLimiter.destroy();
     this._hotReloadManager.destroy();
+    if (this._jobManager) {
+      this._jobManager.destroy();
+    }
 
     this._logger.info('XtonCore Enhanced shutdown complete');
   }

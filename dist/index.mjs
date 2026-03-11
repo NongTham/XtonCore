@@ -1409,7 +1409,6 @@ async function buildCommandTreeLazy(commandsDir) {
 }
 async function loadCommandMetadata(filePath) {
   try {
-    delete __require.cache[__require.resolve(filePath)];
     const commandModule = __require(filePath);
     const { data, deleted, cooldown, permissions, aliases: aliases2, category, ownerOnly, guildOnly, nsfw, customData, ...rest } = commandModule.default || commandModule;
     if (!data) {
@@ -1444,7 +1443,6 @@ async function loadCommandFunction(command) {
   if (command._loaded) return;
   try {
     const startTime = Date.now();
-    delete __require.cache[__require.resolve(command._filePath)];
     const commandModule = __require(command._filePath);
     const { run, autocomplete } = commandModule.default || commandModule;
     if (!run) {
@@ -1504,7 +1502,6 @@ function areCommandsDifferent(existingCommand, localCommand) {
 
 // src/logger.ts
 import { createLogger, format, transports } from "winston";
-import fs2 from "fs";
 import path4 from "path";
 
 // node_modules/gradient-string/node_modules/chalk/source/vendor/ansi-styles/index.js
@@ -2120,9 +2117,6 @@ gradient.pastel = pastel;
 
 // src/logger.ts
 var logDir = "Logs";
-if (!fs2.existsSync(logDir)) {
-  fs2.mkdirSync(logDir, { recursive: true });
-}
 var filename = path4.join(logDir, `Client.log`);
 var errorFilename = path4.join(logDir, `Error.log`);
 var debugFilename = path4.join(logDir, `Debug.log`);
@@ -2155,6 +2149,7 @@ ${info.stack}`;
     // Main log file
     new transports.File({
       filename,
+      lazy: true,
       format: format.combine(
         format.json(),
         format.timestamp()
@@ -2167,6 +2162,7 @@ ${info.stack}`;
     new transports.File({
       filename: errorFilename,
       level: "error",
+      lazy: true,
       format: format.combine(
         format.json(),
         format.timestamp()
@@ -2180,6 +2176,7 @@ ${info.stack}`;
       new transports.File({
         filename: debugFilename,
         level: "debug",
+        lazy: true,
         format: format.combine(
           format.json(),
           format.timestamp()
@@ -2211,7 +2208,7 @@ var EnhancedLogger = class _EnhancedLogger {
   info(message, meta) {
     this.logger.info(this.formatMessage(message, meta));
   }
-  error(message, error, p0, reason) {
+  error(message, error) {
     if (error instanceof Error) {
       this.logger.error(this.formatMessage(message), { error: error.message, stack: error.stack });
     } else {
@@ -2300,13 +2297,15 @@ async function registerCommands({
 import { pathToFileURL } from "url";
 
 // src/managers/PerformanceManager.ts
-import fs3 from "fs/promises";
+import fs2 from "fs/promises";
 import path5 from "path";
 var PerformanceManager = class {
   metrics;
   commandStats;
   startTime;
   statsFile;
+  _memoryInterval;
+  _saveInterval;
   constructor() {
     this.startTime = Date.now();
     this.statsFile = path5.join(process.cwd(), "stats", "command-stats.json");
@@ -2324,14 +2323,14 @@ var PerformanceManager = class {
   }
   async initializeStatsDirectory() {
     try {
-      await fs3.mkdir(path5.dirname(this.statsFile), { recursive: true });
+      await fs2.mkdir(path5.dirname(this.statsFile), { recursive: true });
     } catch (error) {
       Clientlogger.error("Failed to create stats directory:", error);
     }
   }
   async loadStats() {
     try {
-      const data = await fs3.readFile(this.statsFile, "utf-8");
+      const data = await fs2.readFile(this.statsFile, "utf-8");
       const savedStats = JSON.parse(data);
       for (const [name, stats] of Object.entries(savedStats)) {
         this.commandStats.set(name, {
@@ -2347,13 +2346,13 @@ var PerformanceManager = class {
   async saveStats() {
     try {
       const statsObject = Object.fromEntries(this.commandStats);
-      await fs3.writeFile(this.statsFile, JSON.stringify(statsObject, null, 2));
+      await fs2.writeFile(this.statsFile, JSON.stringify(statsObject, null, 2));
     } catch (error) {
       Clientlogger.error("Failed to save stats:", error);
     }
   }
   startMemoryMonitoring() {
-    setInterval(() => {
+    this._memoryInterval = setInterval(() => {
       const memUsage = process.memoryUsage().heapUsed / 1024 / 1024;
       this.metrics.memoryUsage.push(memUsage);
       if (this.metrics.memoryUsage.length > 100) {
@@ -2361,9 +2360,11 @@ var PerformanceManager = class {
       }
       this.metrics.uptime = Date.now() - this.startTime;
     }, 3e4);
-    setInterval(() => {
+    this._memoryInterval.unref();
+    this._saveInterval = setInterval(() => {
       this.saveStats();
     }, 3e5);
+    this._saveInterval.unref();
   }
   recordCommandExecution(commandName, executionTime) {
     this.metrics.commandExecutions.set(
@@ -2434,82 +2435,182 @@ var PerformanceManager = class {
     });
     return report;
   }
+  destroy() {
+    if (this._memoryInterval) {
+      clearInterval(this._memoryInterval);
+    }
+    if (this._saveInterval) {
+      clearInterval(this._saveInterval);
+    }
+    this.commandStats.clear();
+  }
 };
 
-// src/managers/CooldownManager.ts
-var CooldownManager = class {
-  cooldowns;
+// src/adapters/MemoryAdapter.ts
+var MemoryAdapter = class {
+  cache;
   cleanupInterval;
   constructor() {
-    this.cooldowns = /* @__PURE__ */ new Map();
+    this.cache = /* @__PURE__ */ new Map();
     this.startCleanup();
   }
   startCleanup() {
     this.cleanupInterval = setInterval(() => {
       const now = Date.now();
-      for (const [key, data] of this.cooldowns.entries()) {
-        if (data.expiresAt <= now) {
-          this.cooldowns.delete(key);
+      for (const [key, item] of this.cache.entries()) {
+        if (item.expiresAt !== null && item.expiresAt <= now) {
+          this.cache.delete(key);
         }
       }
     }, 6e4);
+    this.cleanupInterval.unref();
+  }
+  getFullKey(namespace, key) {
+    return `${namespace}:${key}`;
+  }
+  async get(namespace, key) {
+    const fullKey = this.getFullKey(namespace, key);
+    const item = this.cache.get(fullKey);
+    if (!item) return null;
+    if (item.expiresAt !== null && item.expiresAt <= Date.now()) {
+      this.cache.delete(fullKey);
+      return null;
+    }
+    return item.value;
+  }
+  async set(namespace, key, value, ttlSeconds) {
+    const fullKey = this.getFullKey(namespace, key);
+    const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1e3 : null;
+    this.cache.set(fullKey, { value, expiresAt });
+  }
+  async delete(namespace, key) {
+    const fullKey = this.getFullKey(namespace, key);
+    return this.cache.delete(fullKey);
+  }
+  async clear(namespace) {
+    const prefix = `${namespace}:`;
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+  async getKeys(namespace) {
+    const prefix = `${namespace}:`;
+    const keys = [];
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        keys.push(key.substring(prefix.length));
+      }
+    }
+    return keys;
+  }
+  async getAll(namespace) {
+    const prefix = `${namespace}:`;
+    const values = [];
+    const now = Date.now();
+    for (const [key, item] of this.cache.entries()) {
+      if (key.startsWith(prefix)) {
+        if (item.expiresAt === null || item.expiresAt > now) {
+          values.push(item.value);
+        } else {
+          this.cache.delete(key);
+        }
+      }
+    }
+    return values;
+  }
+  async disconnect() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    this.cache.clear();
+  }
+};
+
+// src/managers/CooldownManager.ts
+var CooldownManager = class {
+  adapter;
+  namespace = "cooldowns";
+  constructor(adapter) {
+    this.adapter = adapter || new MemoryAdapter();
   }
   getCooldownKey(userId, commandName) {
     return `${userId}-${commandName}`;
   }
-  setCooldown(userId, commandName, duration) {
+  async setCooldown(userId, commandName, duration) {
     const key = this.getCooldownKey(userId, commandName);
     const expiresAt = Date.now() + duration * 1e3;
-    this.cooldowns.set(key, {
+    const data = {
       userId,
       commandName,
       expiresAt
-    });
+    };
+    await this.adapter.set(this.namespace, key, data, duration + 5);
     Clientlogger.debug(`Set cooldown for user ${userId} on command ${commandName} for ${duration}s`);
   }
-  getCooldown(userId, commandName) {
+  async getCooldown(userId, commandName) {
     const key = this.getCooldownKey(userId, commandName);
-    const cooldown = this.cooldowns.get(key);
+    const cooldown = await this.adapter.get(this.namespace, key);
     if (!cooldown) return null;
     if (cooldown.expiresAt <= Date.now()) {
-      this.cooldowns.delete(key);
+      await this.adapter.delete(this.namespace, key);
       return null;
     }
     return cooldown;
   }
-  getRemainingTime(userId, commandName) {
-    const cooldown = this.getCooldown(userId, commandName);
+  async getRemainingTime(userId, commandName) {
+    const cooldown = await this.getCooldown(userId, commandName);
     if (!cooldown) return 0;
     return Math.max(0, Math.ceil((cooldown.expiresAt - Date.now()) / 1e3));
   }
-  isOnCooldown(userId, commandName) {
-    return this.getCooldown(userId, commandName) !== null;
+  async isOnCooldown(userId, commandName) {
+    const cooldown = await this.getCooldown(userId, commandName);
+    return cooldown !== null;
   }
-  removeCooldown(userId, commandName) {
+  async removeCooldown(userId, commandName) {
     const key = this.getCooldownKey(userId, commandName);
-    return this.cooldowns.delete(key);
+    return await this.adapter.delete(this.namespace, key);
   }
-  clearUserCooldowns(userId) {
+  async clearUserCooldowns(userId) {
     let cleared = 0;
-    for (const [key, data] of this.cooldowns.entries()) {
-      if (data.userId === userId) {
-        this.cooldowns.delete(key);
-        cleared++;
+    if (this.adapter.getAll) {
+      const allCooldowns = await this.adapter.getAll(this.namespace);
+      for (const data of allCooldowns) {
+        if (data.userId === userId) {
+          await this.adapter.delete(this.namespace, this.getCooldownKey(data.userId, data.commandName));
+          cleared++;
+        }
+      }
+    } else if (this.adapter.getKeys) {
+      const keys = await this.adapter.getKeys(this.namespace);
+      for (const key of keys) {
+        if (key.startsWith(`${userId}-`)) {
+          await this.adapter.delete(this.namespace, key);
+          cleared++;
+        }
       }
     }
     return cleared;
   }
-  getAllCooldowns() {
-    return Array.from(this.cooldowns.values());
-  }
-  getCooldownCount() {
-    return this.cooldowns.size;
-  }
-  destroy() {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
+  async getAllCooldowns() {
+    if (this.adapter.getAll) {
+      return await this.adapter.getAll(this.namespace);
     }
-    this.cooldowns.clear();
+    return [];
+  }
+  async getCooldownCount() {
+    if (this.adapter.getKeys) {
+      const keys = await this.adapter.getKeys(this.namespace);
+      return keys.length;
+    }
+    return 0;
+  }
+  async destroy() {
+    await this.adapter.clear(this.namespace);
+    if (this.adapter.disconnect) {
+      await this.adapter.disconnect();
+    }
   }
 };
 
@@ -2666,6 +2767,7 @@ var PermissionManager = class {
   blacklistedUsers;
   blacklistedGuilds;
   permissionCache;
+  cleanupInterval;
   constructor(ownerIds = []) {
     this.ownerIds = new Set(ownerIds);
     this.blacklistedUsers = /* @__PURE__ */ new Set();
@@ -2674,7 +2776,7 @@ var PermissionManager = class {
     this.startCacheCleanup();
   }
   startCacheCleanup() {
-    setInterval(() => {
+    this.cleanupInterval = setInterval(() => {
       const now = Date.now();
       for (const [key, data] of this.permissionCache.entries()) {
         if (data.expiresAt <= now) {
@@ -2682,6 +2784,7 @@ var PermissionManager = class {
         }
       }
     }, 3e5);
+    this.cleanupInterval.unref();
   }
   addOwner(userId) {
     this.ownerIds.add(userId);
@@ -2805,39 +2908,34 @@ var PermissionManager = class {
       cachedPermissions: this.permissionCache.size
     };
   }
+  destroy() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    this.permissionCache.clear();
+  }
 };
 
 // src/managers/RateLimiter.ts
 var RateLimiter = class {
-  limits;
+  adapter;
+  namespace = "ratelimits";
   defaultLimit;
   defaultWindow;
   // in seconds
-  cleanupInterval;
-  constructor(defaultLimit = 5, defaultWindow = 60) {
-    this.limits = /* @__PURE__ */ new Map();
+  constructor(defaultLimit = 5, defaultWindow = 60, adapter) {
+    this.adapter = adapter || new MemoryAdapter();
     this.defaultLimit = defaultLimit;
     this.defaultWindow = defaultWindow;
-    this.startCleanup();
-  }
-  startCleanup() {
-    this.cleanupInterval = setInterval(() => {
-      const now = Date.now();
-      for (const [key, data] of this.limits.entries()) {
-        if (data.resetTime <= now) {
-          this.limits.delete(key);
-        }
-      }
-    }, 3e4);
   }
   getKey(identifier, action = "default") {
     return `${identifier}:${action}`;
   }
-  checkLimit(identifier, action = "default", limit = this.defaultLimit, windowSeconds = this.defaultWindow) {
+  async checkLimit(identifier, action = "default", limit = this.defaultLimit, windowSeconds = this.defaultWindow) {
     const key = this.getKey(identifier, action);
     const now = Date.now();
     const windowMs = windowSeconds * 1e3;
-    let data = this.limits.get(key);
+    let data = await this.adapter.get(this.namespace, key);
     if (!data || data.resetTime <= now) {
       data = {
         count: 0,
@@ -2865,7 +2963,8 @@ var RateLimiter = class {
       data.blocked = true;
       Clientlogger.warn(`Rate limit exceeded for ${identifier}:${action}`);
     }
-    this.limits.set(key, data);
+    const ttl = Math.ceil((data.resetTime - now) / 1e3) + 5;
+    await this.adapter.set(this.namespace, key, data, ttl);
     return {
       allowed,
       remaining: Math.max(0, limit - data.count),
@@ -2873,67 +2972,75 @@ var RateLimiter = class {
       blocked: data.blocked
     };
   }
-  isBlocked(identifier, action = "default") {
+  async isBlocked(identifier, action = "default") {
     const key = this.getKey(identifier, action);
-    const data = this.limits.get(key);
+    const data = await this.adapter.get(this.namespace, key);
     if (!data) return false;
     const now = Date.now();
     if (data.resetTime <= now) {
-      this.limits.delete(key);
+      await this.adapter.delete(this.namespace, key);
       return false;
     }
     return data.blocked;
   }
-  getRemainingTime(identifier, action = "default") {
+  async getRemainingTime(identifier, action = "default") {
     const key = this.getKey(identifier, action);
-    const data = this.limits.get(key);
+    const data = await this.adapter.get(this.namespace, key);
     if (!data) return 0;
     const now = Date.now();
     return Math.max(0, Math.ceil((data.resetTime - now) / 1e3));
   }
-  clearLimit(identifier, action) {
+  async clearLimit(identifier, action) {
     if (action) {
       const key = this.getKey(identifier, action);
-      return this.limits.delete(key);
+      return await this.adapter.delete(this.namespace, key);
     } else {
       let cleared = 0;
-      for (const key of this.limits.keys()) {
-        if (key.startsWith(`${identifier}:`)) {
-          this.limits.delete(key);
-          cleared++;
+      if (this.adapter.getKeys) {
+        const keys = await this.adapter.getKeys(this.namespace);
+        for (const key of keys) {
+          if (key.startsWith(`${identifier}:`)) {
+            await this.adapter.delete(this.namespace, key);
+            cleared++;
+          }
         }
       }
       return cleared > 0;
     }
   }
-  getStats() {
+  async getStats() {
     const now = Date.now();
     let blocked = 0;
     let active = 0;
-    for (const data of this.limits.values()) {
-      if (data.resetTime > now) {
-        active++;
-        if (data.blocked) {
-          blocked++;
+    let total = 0;
+    if (this.adapter.getAll) {
+      const allData = await this.adapter.getAll(this.namespace);
+      total = allData.length;
+      for (const data of allData) {
+        if (data.resetTime > now) {
+          active++;
+          if (data.blocked) {
+            blocked++;
+          }
         }
       }
     }
     return {
-      totalLimits: this.limits.size,
+      totalLimits: total,
       blockedLimits: blocked,
       activeLimits: active
     };
   }
-  destroy() {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
+  async destroy() {
+    await this.adapter.clear(this.namespace);
+    if (this.adapter.disconnect) {
+      await this.adapter.disconnect();
     }
-    this.limits.clear();
   }
 };
 
 // src/managers/HotReloadManager.ts
-import fs4 from "fs";
+import fs3 from "fs";
 import path7 from "path";
 var HotReloadManager = class {
   watchers;
@@ -2948,11 +3055,11 @@ var HotReloadManager = class {
     if (!this.enabled) return;
     const { recursive = true, extensions = [".js", ".ts"] } = options;
     try {
-      if (!fs4.existsSync(directory)) {
+      if (!fs3.existsSync(directory)) {
         Clientlogger.warn(`Hot reload: Directory ${directory} does not exist`);
         return;
       }
-      const watcher = fs4.watch(directory, { recursive }, async (eventType, filename2) => {
+      const watcher = fs3.watch(directory, { recursive }, async (eventType, filename2) => {
         if (!filename2) return;
         const filePath = path7.join(directory, filename2);
         const ext = path7.extname(filename2);
@@ -3024,9 +3131,296 @@ var HotReloadManager = class {
   }
 };
 
+// src/managers/MiddlewareManager.ts
+var MiddlewareManager = class {
+  middlewares = [];
+  /**
+   * Register a middleware function to be executed before a command runs
+   */
+  use(middleware) {
+    if (typeof middleware !== "function") {
+      throw new Error("Middleware must be a function");
+    }
+    this.middlewares.push(middleware);
+  }
+  /**
+   * Execute the middleware pipeline
+   * @param context Context object containing interaction, command, etc.
+   * @returns boolean indicating if the pipeline successfully reached the end
+   */
+  async execute(context) {
+    let index = -1;
+    let completed = false;
+    const dispatch = async (i, error) => {
+      if (error) {
+        throw error;
+      }
+      if (i <= index) {
+        throw new Error("next() called multiple times in a single middleware");
+      }
+      index = i;
+      if (i === this.middlewares.length) {
+        completed = true;
+        return;
+      }
+      const middleware = this.middlewares[i];
+      try {
+        await middleware(context, async (err) => {
+          await dispatch(i + 1, err);
+        });
+      } catch (err) {
+        Clientlogger.error(`Error executing middleware at index ${i}:`, err);
+        throw err;
+      }
+    };
+    try {
+      await dispatch(0);
+      return completed;
+    } catch (err) {
+      if (err instanceof Error && err.message !== "next() called multiple times in a single middleware") {
+        Clientlogger.error("Unhandled error in middleware pipeline", err);
+      }
+      return false;
+    }
+  }
+  /**
+   * Get the number of registered middlewares
+   */
+  getCount() {
+    return this.middlewares.length;
+  }
+  /**
+   * Clear all registered middlewares
+   */
+  clear() {
+    this.middlewares = [];
+  }
+};
+
+// src/managers/JobManager.ts
+import * as cron from "node-cron";
+import fs4 from "fs";
+import path8 from "path";
+var JobManager = class {
+  jobs = /* @__PURE__ */ new Map();
+  jobsPath;
+  client;
+  handler;
+  constructor(jobsPath, client, handler) {
+    this.jobsPath = jobsPath;
+    this.client = client;
+    this.handler = handler;
+  }
+  /**
+   * Load all jobs from the specified directory
+   */
+  async loadJobs() {
+    if (!fs4.existsSync(this.jobsPath)) {
+      Clientlogger.warn(`Jobs directory not found at ${this.jobsPath}`);
+      return 0;
+    }
+    this.stopAll();
+    this.jobs.clear();
+    const jobFiles = fs4.readdirSync(this.jobsPath).filter((file) => file.endsWith(".ts") || file.endsWith(".js"));
+    let loadedCount = 0;
+    for (const file of jobFiles) {
+      const filePath = path8.join(this.jobsPath, file);
+      try {
+        delete __require.cache[__require.resolve(filePath)];
+        const jobModule = __require(filePath);
+        const job = jobModule.default || jobModule;
+        if (!job.name || !job.cron || !job.run) {
+          Clientlogger.error(`Invalid job format in ${file}. Expected name, cron, and run fields.`);
+          continue;
+        }
+        if (!cron.validate(job.cron)) {
+          Clientlogger.error(`Invalid cron expression "${job.cron}" for job ${job.name} in ${file}`);
+          continue;
+        }
+        this.scheduleJob(job);
+        loadedCount++;
+      } catch (error) {
+        Clientlogger.error(`Error loading job from ${file}:`, error);
+      }
+    }
+    Clientlogger.info(`Loaded ${loadedCount} scheduled jobs`);
+    return loadedCount;
+  }
+  /**
+   * Schedule a singular job
+   */
+  scheduleJob(job) {
+    if (job.enabled === false) {
+      Clientlogger.debug(`Job ${job.name} is disabled. Skipping...`);
+      return;
+    }
+    const task = cron.schedule(job.cron, async () => {
+      Clientlogger.debug(`Executing job: ${job.name}`);
+      try {
+        await job.run(this.client, this.handler);
+      } catch (error) {
+        Clientlogger.error(`Error executing job ${job.name}:`, error);
+      }
+    });
+    this.jobs.set(job.name, { jobDef: job, task });
+  }
+  /**
+   * Stop a specific job
+   */
+  stopJob(name) {
+    const job = this.jobs.get(name);
+    if (job) {
+      job.task.stop();
+      return true;
+    }
+    return false;
+  }
+  /**
+   * Start a manually stopped job
+   */
+  startJob(name) {
+    const job = this.jobs.get(name);
+    if (job) {
+      job.task.start();
+      return true;
+    }
+    return false;
+  }
+  /**
+   * Get statistics about loaded jobs
+   */
+  getStats() {
+    return {
+      total: this.jobs.size,
+      activeNames: Array.from(this.jobs.keys())
+    };
+  }
+  /**
+   * Stop all jobs
+   */
+  stopAll() {
+    for (const [_, job] of this.jobs) {
+      job.task.stop();
+    }
+  }
+  /**
+   * Clean up everything
+   */
+  destroy() {
+    this.stopAll();
+    this.jobs.clear();
+  }
+};
+
+// src/managers/LanguageManager.ts
+import * as fs5 from "fs";
+import * as path9 from "path";
+var LanguageManager = class {
+  locales = /* @__PURE__ */ new Map();
+  localesPath;
+  defaultLocale;
+  constructor(options = {}) {
+    this.localesPath = options.localesPath;
+    this.defaultLocale = options.defaultLocale || "en-US";
+  }
+  /**
+   * Load JSON translation files from the specified locales path
+   */
+  async loadLocales() {
+    if (!this.localesPath) return 0;
+    if (!fs5.existsSync(this.localesPath)) {
+      Clientlogger.warn(`Locales directory not found at ${this.localesPath}`);
+      return 0;
+    }
+    this.locales.clear();
+    let loadedCount = 0;
+    const files = fs5.readdirSync(this.localesPath).filter((file) => file.endsWith(".json"));
+    for (const file of files) {
+      const locale = path9.basename(file, ".json");
+      const filePath = path9.join(this.localesPath, file);
+      try {
+        const content = fs5.readFileSync(filePath, "utf-8");
+        const parsed = JSON.parse(content);
+        const flattened = this.flattenObject(parsed);
+        this.locales.set(locale, flattened);
+        loadedCount++;
+      } catch (err) {
+        Clientlogger.error(`Error loading locale file ${file}:`, err);
+      }
+    }
+    Clientlogger.info(`Loaded ${loadedCount} language files (Default: ${this.defaultLocale})`);
+    return loadedCount;
+  }
+  /**
+   * Translate a key into the specified locale, with optional variable substitution.
+   * If the key is not found in the locale, it falls back to the default locale.
+   * If not found at all, it returns the key itself.
+   * 
+   * @param key The translation key, e.g. 'messages.welcome'
+   * @param locale The desired locale, e.g. 'th-TH'
+   * @param args Array or Object of variables to substitute into {{var}} or {0} style placeholders
+   */
+  translate(key, locale, args) {
+    const targetLocale = locale || this.defaultLocale;
+    let translation = this.getTranslation(key, targetLocale);
+    if (translation === void 0 && targetLocale !== this.defaultLocale) {
+      translation = this.getTranslation(key, this.defaultLocale);
+    }
+    if (translation === void 0) {
+      return key;
+    }
+    if (args) {
+      translation = this.interpolate(translation, args);
+    }
+    return translation;
+  }
+  /**
+   * Alias for translate (common in i18n libraries)
+   */
+  t(key, locale, args) {
+    return this.translate(key, locale, args);
+  }
+  getTranslation(key, locale) {
+    const localeData = this.locales.get(locale);
+    return localeData ? localeData[key] : void 0;
+  }
+  interpolate(str, args) {
+    return str.replace(/\{{1,2}\s*([^}]+?)\s*\}{1,2}/g, (match, key) => {
+      const val = args[key];
+      return val !== void 0 && val !== null ? String(val) : match;
+    });
+  }
+  /**
+   * Flattens a nested object into dot-notation keys.
+   * Example: { "a": { "b": "c" } } -> { "a.b": "c" }
+   */
+  flattenObject(ob) {
+    const toReturn = {};
+    for (const i in ob) {
+      if (!ob.hasOwnProperty(i)) continue;
+      if (typeof ob[i] === "object" && ob[i] !== null) {
+        const flatObject = this.flattenObject(ob[i]);
+        for (const x in flatObject) {
+          if (!flatObject.hasOwnProperty(x)) continue;
+          toReturn[i + "." + x] = flatObject[x];
+        }
+      } else {
+        toReturn[i] = String(ob[i]);
+      }
+    }
+    return toReturn;
+  }
+  /**
+   * Get loaded locales list
+   */
+  getAvailableLocales() {
+    return Array.from(this.locales.keys());
+  }
+};
+
 // src/index.ts
 import figlet from "figlet";
-import path8 from "path";
+import path10 from "path";
 
 // src/utils/EmbedBuilder.ts
 import { EmbedBuilder } from "discord.js";
@@ -3403,6 +3797,105 @@ var InputSanitizer = class {
   }
 };
 
+// src/utils/PaginationBuilder.ts
+import {
+  ActionRowBuilder as ActionRowBuilder2,
+  ButtonBuilder as ButtonBuilder2,
+  ButtonStyle as ButtonStyle2,
+  ComponentType as ComponentType2
+} from "discord.js";
+var PaginationBuilder = class {
+  embeds = [];
+  interaction;
+  timeout;
+  currentPage = 0;
+  ephemeral = false;
+  constructor(interaction, timeoutMs = 6e4) {
+    this.interaction = interaction;
+    this.timeout = timeoutMs;
+  }
+  /**
+   * Set the array of embeds to paginate through
+   */
+  setEmbeds(embeds) {
+    this.embeds = embeds;
+    return this;
+  }
+  /**
+   * Set whether the pagination message should be ephemeral
+   */
+  setEphemeral(ephemeral) {
+    this.ephemeral = ephemeral;
+    return this;
+  }
+  /**
+   * Render and start the pagination collector
+   */
+  async render() {
+    if (this.embeds.length === 0) {
+      throw new Error("No embeds to paginate");
+    }
+    if (this.embeds.length === 1) {
+      const reply2 = await this.interaction.reply({
+        embeds: [this.embeds[0]],
+        ephemeral: this.ephemeral,
+        fetchReply: true
+      });
+      return reply2;
+    }
+    const row = this.createButtons();
+    this.embeds.forEach((embed, i) => {
+      const existingFooter = embed.data.footer?.text;
+      if (!existingFooter?.includes("Page")) {
+        embed.setFooter({
+          text: `${existingFooter ? existingFooter + " \u2022 " : ""}Page ${i + 1} of ${this.embeds.length}`,
+          iconURL: embed.data.footer?.icon_url
+        });
+      }
+    });
+    const reply = await this.interaction.reply({
+      embeds: [this.embeds[this.currentPage]],
+      components: [row],
+      ephemeral: this.ephemeral,
+      fetchReply: true
+    });
+    const collector = reply.createMessageComponentCollector({
+      componentType: ComponentType2.Button,
+      time: this.timeout
+    });
+    collector.on("collect", async (i) => {
+      if (i.user.id !== this.interaction.user.id) {
+        await i.reply({ content: "You cannot use these buttons.", ephemeral: true });
+        return;
+      }
+      await i.deferUpdate();
+      if (i.customId === "prev_page") {
+        this.currentPage = this.currentPage > 0 ? this.currentPage - 1 : this.embeds.length - 1;
+      } else if (i.customId === "next_page") {
+        this.currentPage = this.currentPage + 1 < this.embeds.length ? this.currentPage + 1 : 0;
+      }
+      await this.interaction.editReply({
+        embeds: [this.embeds[this.currentPage]],
+        components: [this.createButtons()]
+      }).catch((err) => Clientlogger.warn("Failed to edit pagination message", err));
+    });
+    collector.on("end", async () => {
+      const disabledRow = this.createButtons(true);
+      await this.interaction.editReply({
+        components: [disabledRow]
+      }).catch(() => null);
+    });
+    return reply;
+  }
+  createButtons(disabled = false) {
+    const row = new ActionRowBuilder2().addComponents(
+      new ButtonBuilder2().setCustomId("prev_page").setLabel("Previous").setStyle(ButtonStyle2.Secondary).setDisabled(disabled),
+      new ButtonBuilder2().setCustomId("next_page").setLabel("Next").setStyle(ButtonStyle2.Primary).setDisabled(disabled)
+    );
+    return row;
+  }
+};
+
 // src/utils/CommandBuilder.ts
 import {
   SlashCommandBuilder,
@@ -3546,6 +4039,9 @@ var ClientHandler = class _ClientHandler {
   _permissionManager;
   _rateLimiter;
   _hotReloadManager;
+  _middlewareManager;
+  _jobManager;
+  _languageManager;
   _logger;
   static async create(options) {
     const handler = new _ClientHandler(options);
@@ -3559,6 +4055,9 @@ var ClientHandler = class _ClientHandler {
       eventsPath,
       validationsPath,
       componentsPath,
+      jobsPath,
+      localesPath,
+      defaultLocale,
       guild,
       ownerIds = [],
       enableHotReload = process.env.NODE_ENV === "development",
@@ -3591,6 +4090,13 @@ var ClientHandler = class _ClientHandler {
       rateLimiting.defaultWindow
     );
     this._hotReloadManager = new HotReloadManager(enableHotReload);
+    this._middlewareManager = new MiddlewareManager();
+    if (jobsPath) {
+      this._jobManager = new JobManager(jobsPath, client, this);
+    }
+    if (localesPath) {
+      this._languageManager = new LanguageManager({ localesPath, defaultLocale });
+    }
     this._componentManager.setClientHandler(this);
     if (this._validationsPath && !commandsPath) {
       throw new Error(
@@ -3625,6 +4131,12 @@ var ClientHandler = class _ClientHandler {
     }
     if (this._eventsPath) {
       initTasks.push(this._eventsInit());
+    }
+    if (this._jobManager) {
+      initTasks.push(this._jobManager.loadJobs().then());
+    }
+    if (this._languageManager) {
+      initTasks.push(this._languageManager.loadLocales().then());
     }
     await Promise.all(initTasks);
     const loadTime = Date.now() - startTime;
@@ -3714,7 +4226,7 @@ var ClientHandler = class _ClientHandler {
     const eventPaths = await getFolderPaths(this._eventsPath);
     let totalEvents = 0;
     for (const eventPath of eventPaths) {
-      const eventName = path8.basename(eventPath);
+      const eventName = path10.basename(eventPath);
       const eventFuncPaths = await getFilePaths(eventPath, true);
       eventFuncPaths.sort();
       if (!eventName) continue;
@@ -3722,7 +4234,7 @@ var ClientHandler = class _ClientHandler {
       this._client.on(eventName, async (...args) => {
         for (const eventFuncPath of eventFuncPaths) {
           try {
-            const absolutePath = path8.resolve(eventFuncPath);
+            const absolutePath = path10.resolve(eventFuncPath);
             const eventModule = __require(absolutePath);
             const eventFunc = eventModule.default || eventModule;
             if (typeof eventFunc === "function") {
@@ -3750,7 +4262,7 @@ var ClientHandler = class _ClientHandler {
     validationFilePaths.sort();
     for (const validationFilePath of validationFilePaths) {
       try {
-        const absolutePath = path8.resolve(validationFilePath);
+        const absolutePath = path10.resolve(validationFilePath);
         const fileURL = pathToFileURL(absolutePath).href;
         const validationModule = await import(fileURL);
         const validationFunc = validationModule.default || validationModule;
@@ -3777,9 +4289,9 @@ var ClientHandler = class _ClientHandler {
       const guildId = interaction.guildId;
       try {
         if (this._options.rateLimiting?.enabled) {
-          const rateLimit = this._rateLimiter.checkLimit(userId, "command");
+          const rateLimit = await this._rateLimiter.checkLimit(userId, "command");
           if (!rateLimit.allowed) {
-            const remainingTime = this._rateLimiter.getRemainingTime(userId, "command");
+            const remainingTime = await this._rateLimiter.getRemainingTime(userId, "command");
             await interaction.reply({
               content: `\u23F0 You're being rate limited! Please wait ${remainingTime} seconds before using commands again.`,
               ephemeral: true
@@ -3796,8 +4308,8 @@ var ClientHandler = class _ClientHandler {
           return;
         }
         if (command.cooldown && command.cooldown > 0) {
-          if (this._cooldownManager.isOnCooldown(userId, command.name)) {
-            const remainingTime = this._cooldownManager.getRemainingTime(userId, command.name);
+          if (await this._cooldownManager.isOnCooldown(userId, command.name)) {
+            const remainingTime = await this._cooldownManager.getRemainingTime(userId, command.name);
             await interaction.reply({
               content: `\u23F3 This command is on cooldown! Please wait ${remainingTime} seconds.`,
               ephemeral: true
@@ -3816,6 +4328,15 @@ var ClientHandler = class _ClientHandler {
           }
           if (!canRun) return;
         }
+        const context = {
+          interaction,
+          command,
+          client: this._client,
+          handler: this,
+          state: {}
+        };
+        const passedMiddleware = await this._middlewareManager.execute(context);
+        if (!passedMiddleware) return;
         const lazyCommand = command;
         if (lazyCommand._loaded === false && lazyCommand._filePath) {
           this._logger.debug(`\u26A1 Lazy loading function for "${command.name}"...`);
@@ -3830,7 +4351,7 @@ var ClientHandler = class _ClientHandler {
           handler: this
         });
         if (command.cooldown && command.cooldown > 0) {
-          this._cooldownManager.setCooldown(userId, command.name, command.cooldown);
+          await this._cooldownManager.setCooldown(userId, command.name, command.cooldown);
         }
         const executionTime = Date.now() - startTime;
         this._performanceManager.recordCommandExecution(command.name, executionTime);
@@ -3891,6 +4412,15 @@ var ClientHandler = class _ClientHandler {
   }
   get hotReloadManager() {
     return this._hotReloadManager;
+  }
+  get middlewareManager() {
+    return this._middlewareManager;
+  }
+  get jobManager() {
+    return this._jobManager;
+  }
+  get languageManager() {
+    return this._languageManager;
   }
   // Utility methods
   async reloadCommands() {
@@ -3984,19 +4514,19 @@ var ClientHandler = class _ClientHandler {
     const percentage = total > 0 ? Math.round(loaded / total * 100) : 0;
     return { total, loaded, unloaded, percentage };
   }
-  getStats() {
+  async getStats() {
     return {
       commands: this._commands.length,
       performance: this._performanceManager.getPerformanceMetrics(),
-      cooldowns: this._cooldownManager.getCooldownCount(),
+      cooldowns: await this._cooldownManager.getCooldownCount(),
       components: this._componentManager.getHandlerCount(),
       permissions: this._permissionManager.getStats(),
-      rateLimiter: this._rateLimiter.getStats(),
+      rateLimiter: await this._rateLimiter.getStats(),
       hotReload: this._hotReloadManager.getStats()
     };
   }
-  generateReport() {
-    const stats = this.getStats();
+  async generateReport() {
+    const stats = await this.getStats();
     const performanceReport = this._performanceManager.generateReport();
     let report = `\u{1F680} **XtonCore Enhanced Status Report**
 
@@ -4022,6 +4552,9 @@ var ClientHandler = class _ClientHandler {
     this._cooldownManager.destroy();
     this._rateLimiter.destroy();
     this._hotReloadManager.destroy();
+    if (this._jobManager) {
+      this._jobManager.destroy();
+    }
     this._logger.info("XtonCore Enhanced shutdown complete");
   }
 };
@@ -4035,7 +4568,11 @@ export {
   EnhancedEmbedBuilder,
   HotReloadManager,
   InputSanitizer,
+  JobManager,
+  LanguageManager,
   Logger,
+  MiddlewareManager,
+  PaginationBuilder,
   PerformanceManager,
   PermissionManager,
   RateLimiter

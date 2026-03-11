@@ -1,4 +1,4 @@
-# XtonCore Enhanced v2.1 🚀
+# XtonCore Framework v3.0.0 🚀
 
 <div align="center">
 
@@ -7,7 +7,7 @@
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 
-**The most powerful Discord.js v14 handler with advanced performance optimizations**
+**A comprehensive, production-ready Discord.js framework with powerful optimizations**
 
 [Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Examples](#-examples)
 
@@ -31,20 +31,28 @@
 - **Component Handler** - Button, select menu, and modal interaction handling
 - **Validation System** - Flexible command validation pipeline
 
+### 🏗️ Advanced Framework Features (v3.0)
+
+- **Middleware Pipeline** - Express-style `.use()` pipeline to intercept commands
+- **Cron Job Manager** - Built-in scheduled tasks loaded from `jobs/`
+- **Localization (i18n)** - Multi-language support with `locales/` dynamic loading
+- **Persistent Storage** - `IStorageAdapter` for Redis/DB instead of memory caching
+- **Automated Pagination** - Easy and secure embed paginations out-of-the-box
+
 ### 🚀 Enhanced Features
 
-- **Performance Monitoring** - Real-time command execution tracking and statistics
-- **Cooldown Management** - Per-user, per-command cooldown system
+- **Performance Monitoring** - Real-time execution tracking and statistics
+- **Cooldown Management** - Per-user, per-command cooldown system (Persistent)
 - **Permission System** - Advanced permission checking with caching
-- **Rate Limiting** - Built-in rate limiting to prevent abuse
+- **Rate Limiting** - Built-in rate limiting to prevent abuse (Persistent)
 - **Input Sanitization** - Security-focused input validation
-- **Component Helpers** - Easy-to-use builders for Discord components
 - **Enhanced Logging** - Multi-level logging with context
 
 ### 🎨 Utility Classes
 
 - **EnhancedEmbedBuilder** - Beautiful preset embeds (success, error, info, etc.)
 - **ComponentHelpers** - Quick Discord component creation
+- **PaginationBuilder** - Automated embed scroll wheels with timeouts
 - **InputSanitizer** - Security-focused input validation
 - **CommandBuilder** - Simplified command creation
 
@@ -86,6 +94,9 @@ async function main() {
     commandsPath: './commands',
     eventsPath: './events',
     componentsPath: './components',
+    jobsPath: './jobs',
+    localesPath: './locales',
+    defaultLocale: 'en-US',
     ownerIds: ['YOUR_USER_ID'],
     
     // ⚡ Performance optimizations (enabled by default)
@@ -447,6 +458,9 @@ interface ClientHandlerOptions {
   eventsPath?: string;               // Path to events directory
   validationsPath?: string;          // Path to validations directory
   componentsPath?: string;           // Path to components directory
+  jobsPath?: string;                 // Path to scheduled cron jobs (v3.0)
+  localesPath?: string;              // Path to translation JSONs (v3.0)
+  defaultLocale?: string;            // Default bot language (v3.0)
   guild?: string;                    // Guild ID for guild-specific commands
   ownerIds?: string[];               // Array of owner user IDs
   
@@ -493,6 +507,48 @@ export async function run({ interaction, customData }: CommandRunOptions<MyComma
     // Your logic here
   }
 }
+```
+
+### 🛑 Advanced Middleware Pipeline
+
+```typescript
+// Define custom context types
+const handler = await ClientHandler.create({ /* ... */ });
+
+handler.middlewareManager.use(async (ctx, next) => {
+  console.log(`Command triggered: ${ctx.command.data.name}`);
+  ctx.state.customProperty = "Hello from Middleware!";
+  
+  if (ctx.interaction.user.bot) {
+    return; // Short-circuit, command doesn't run
+  }
+  
+  await next(); // Proceed to the next middleware or command
+});
+```
+
+### 🌐 Localization (i18n) Usage
+
+```typescript
+// Use anywhere using the handler instance
+const welcomeMessage = handler.languageManager?.t('messages.welcome', 'th-TH', { 
+  user: interaction.user.username 
+});
+await interaction.reply(welcomeMessage);
+```
+
+### 📑 Easy Pagination
+
+```typescript
+import { PaginationBuilder } from 'xtoncore';
+
+const embed1 = new EmbedBuilder().setTitle('Page 1');
+const embed2 = new EmbedBuilder().setTitle('Page 2');
+
+await new PaginationBuilder(interaction, 60000)
+  .setEmbeds([embed1, embed2])
+  .setEphemeral(true)
+  .render();
 ```
 
 ### Production Setup

@@ -42,17 +42,17 @@ export interface LazyCommand extends CommandMetadata {
 export async function buildCommandTreeLazy(commandsDir?: string): Promise<LazyCommand[]> {
   const commandTree: LazyCommand[] = [];
   if (!commandsDir) return [];
-  
+
   const startTime = Date.now();
   const commandFilePaths = await getFilePaths(commandsDir, true);
 
   for (const commandFilePath of commandFilePaths) {
     try {
       const absolutePath = path.resolve(commandFilePath);
-      
+
       // ⚡ LAZY LOADING: Only load metadata, not the run function
       const metadata = await loadCommandMetadata(absolutePath);
-      
+
       if (!metadata) continue;
 
       // Create lazy command object
@@ -79,11 +79,8 @@ export async function buildCommandTreeLazy(commandsDir?: string): Promise<LazyCo
  */
 async function loadCommandMetadata(filePath: string): Promise<CommandMetadata | null> {
   try {
-    // Clear require cache to ensure fresh load
-    delete require.cache[require.resolve(filePath)];
-    
     const commandModule = require(filePath);
-    const { data, deleted, cooldown, permissions, aliases, category, ownerOnly, guildOnly, nsfw, customData, ...rest } = 
+    const { data, deleted, cooldown, permissions, aliases, category, ownerOnly, guildOnly, nsfw, customData, ...rest } =
       commandModule.default || commandModule;
 
     if (!data) {
@@ -127,10 +124,7 @@ export async function loadCommandFunction(command: LazyCommand): Promise<void> {
 
   try {
     const startTime = Date.now();
-    
-    // Clear cache to ensure fresh load
-    delete require.cache[require.resolve(command._filePath)];
-    
+
     const commandModule = require(command._filePath);
     const { run, autocomplete } = commandModule.default || commandModule;
 
@@ -165,7 +159,7 @@ export async function preloadCommands(commands: LazyCommand[], commandNames: str
   }
 
   await Promise.all(preloadTasks);
-  
+
   const loadTime = Date.now() - startTime;
   console.log(`[LazyLoader] Preloaded ${commandNames.length} commands in ${loadTime}ms`);
 }
@@ -176,9 +170,9 @@ export async function preloadCommands(commands: LazyCommand[], commandNames: str
 export async function preloadAllCommands(commands: LazyCommand[]): Promise<void> {
   const startTime = Date.now();
   const preloadTasks = commands.map(cmd => loadCommandFunction(cmd));
-  
+
   await Promise.all(preloadTasks);
-  
+
   const loadTime = Date.now() - startTime;
   console.log(`[LazyLoader] Preloaded all ${commands.length} commands in ${loadTime}ms`);
 }
