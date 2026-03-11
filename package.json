@@ -1,6 +1,6 @@
 {
   "name": "xtoncore",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Enhanced Discord.js handler library with advanced features including performance monitoring, hot reload, component management, and more.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
