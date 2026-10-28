@@ -1,5 +1,5 @@
 /**
- * XtonCore v2.1 — Basic Bot Example
+ * XtonCore v3.0.1 — Basic Bot Example
  * 
  * This example shows how to set up a Discord bot using XtonCore
  * with all the key features: commands, events, components,

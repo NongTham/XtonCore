@@ -19,6 +19,7 @@ import { MiddlewareContext } from './dev';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import path from 'path';
+import type { IStorageAdapter } from './interfaces/IStorageAdapter';
 
 // Re-export types and utilities for better DX
 export type { LocalCommand, ValidationFunction, CommandRunOptions } from './dev';
@@ -37,8 +38,10 @@ export { InputSanitizer } from './utils/InputSanitizer';
 export { PaginationBuilder } from './utils/PaginationBuilder';
 export { CommandBuilder } from './utils/CommandBuilder';
 export { Logger, Clientlogger } from './logger';
+export { MemoryAdapter } from './adapters/MemoryAdapter';
+export type { IStorageAdapter } from './interfaces/IStorageAdapter';
 
-interface ClientHandlerOptions {
+export interface ClientHandlerOptions {
   client: Client;
   commandsPath?: string;
   eventsPath?: string;
@@ -63,6 +66,7 @@ interface ClientHandlerOptions {
     enabled: boolean;
     trackMemory?: boolean;
   };
+  storageAdapter?: IStorageAdapter;
 }
 
 export class ClientHandler {
@@ -89,6 +93,7 @@ export class ClientHandler {
   private _jobManager?: JobManager;
   private _languageManager?: LanguageManager;
   private _logger: typeof Logger;
+  private _eventListeners = new Map<string, (...args: any[]) => void>();
 
   public static async create(options: ClientHandlerOptions): Promise<ClientHandler> {
     const handler = new ClientHandler(options);
@@ -125,7 +130,12 @@ export class ClientHandler {
     this._validationsPath = validationsPath;
     this._componentsPath = componentsPath;
     this._guild = guild;
-    this._options = options;
+    this._options = {
+      ...options,
+      rateLimiting,
+      performance,
+      preloadCommands: preloadCommandsList,
+    };
     this._commands = [];
     this._commandsMap = new Map();
     this._validationFuncs = [];
@@ -133,12 +143,13 @@ export class ClientHandler {
     // Initialize managers
     this._logger = Logger.createChild('ClientHandler');
     this._performanceManager = new PerformanceManager();
-    this._cooldownManager = new CooldownManager();
+    this._cooldownManager = new CooldownManager(options.storageAdapter);
     this._componentManager = new ComponentManager(client, componentsPath);
     this._permissionManager = new PermissionManager(ownerIds);
     this._rateLimiter = new RateLimiter(
       rateLimiting.defaultLimit,
-      rateLimiting.defaultWindow
+      rateLimiting.defaultWindow,
+      options.storageAdapter
     );
     this._hotReloadManager = new HotReloadManager(enableHotReload);
     this._middlewareManager = new MiddlewareManager();
@@ -165,6 +176,9 @@ export class ClientHandler {
     const startTime = Date.now();
 
     try {
+      if (this._options.storageAdapter?.connect) {
+        await this._options.storageAdapter.connect();
+      }
       const figletData: string | undefined = await new Promise((resolve, reject) => {
         figlet("XtonCore", (err, data) => {
           if (err) {
@@ -179,7 +193,7 @@ export class ClientHandler {
       if (figletData) {
         console.log(gradient.rainbow(figletData));
       }
-      this._logger.info("XtonCore Enhanced v2.0 is Starting...");
+      this._logger.info("XtonCore Enhanced v3.0.1 is Starting...");
     } catch (error) {
       this._logger.warn("Could not display startup banner.");
     }
@@ -189,6 +203,7 @@ export class ClientHandler {
 
     // Initialize managers (components)
     initTasks.push(this._initializeManagers());
+    initTasks.push(this._performanceManager.waitUntilReady());
 
     // Initialize commands
     if (this._commandsPath) {
@@ -219,7 +234,7 @@ export class ClientHandler {
     // Setup command handlers after commands are loaded
     if (this._commandsPath) {
       this._client.once('ready', async () => {
-        this._registerSlashCommands();
+        await this._registerSlashCommands();
         if (this._validationsPath) {
           await this._validationsInit();
         }
@@ -256,7 +271,7 @@ export class ClientHandler {
       this._hotReloadManager.watchDirectory(this._commandsPath, async (filePath) => {
         this._logger.info(`Reloading commands due to change in ${filePath}`);
         await this._commandsInit();
-        this._registerSlashCommands();
+        await this._registerSlashCommands();
       });
     }
 
@@ -312,16 +327,23 @@ export class ClientHandler {
     this._logger.debug(`Loaded ${commandArray.length} ${loadType} in ${loadTime}ms`);
   }
 
-  private _registerSlashCommands(): void {
-    registerCommands({
+  private async _registerSlashCommands(): Promise<void> {
+    await registerCommands({
       client: this._client,
       commands: this._commands,
       guild: this._guild,
-    }).catch(error => Clientlogger.error("Error during slash command registration:", error));
+    }).catch(error => {
+      Clientlogger.error("Error during slash command registration:", error);
+      throw error;
+    });
   }
 
   private async _eventsInit(): Promise<void> {
     if (!this._eventsPath) return;
+    for (const [eventName, listener] of this._eventListeners) {
+      this._client.off(eventName, listener);
+    }
+    this._eventListeners.clear();
     const startTime = Date.now();
     const eventPaths = await getFolderPaths(this._eventsPath);
 
@@ -335,10 +357,11 @@ export class ClientHandler {
 
       totalEvents += eventFuncPaths.length;
 
-      this._client.on(eventName, async (...args) => {
+      const listener = async (...args: any[]) => {
         for (const eventFuncPath of eventFuncPaths) {
           try {
             const absolutePath = path.resolve(eventFuncPath);
+            delete require.cache[require.resolve(absolutePath)];
             // Use require for CommonJS compatibility with ts-node
             const eventModule = require(absolutePath);
             const eventFunc = eventModule.default || eventModule;
@@ -357,7 +380,9 @@ export class ClientHandler {
             }
           }
         }
-      });
+      };
+      this._eventListeners.set(eventName, listener);
+      this._client.on(eventName, listener);
     }
     const loadTime = Date.now() - startTime;
     this._logger.debug(`Loaded ${totalEvents} event handlers in ${loadTime}ms`);
@@ -365,12 +390,14 @@ export class ClientHandler {
 
   private async _validationsInit(): Promise<void> {
     if (!this._validationsPath) return;
+    this._validationFuncs = [];
     const validationFilePaths = await getFilePaths(this._validationsPath, true);
     validationFilePaths.sort();
 
     for (const validationFilePath of validationFilePaths) {
       try {
         const absolutePath = path.resolve(validationFilePath);
+        delete require.cache[require.resolve(absolutePath)];
         const fileURL = pathToFileURL(absolutePath).href; // <--- แก้ไขตรงนี้
         const validationModule = await import(fileURL);
         const validationFunc = validationModule.default || validationModule;
@@ -514,10 +541,14 @@ export class ClientHandler {
     this._client.on('interactionCreate', async (interaction) => {
       if (!interaction.isAutocomplete()) return;
 
-      const command = this._commandsMap.get(interaction.commandName);
-      if (!command || !command.autocomplete) return;
+      const command = this._commandsMap.get(interaction.commandName) as LazyCommand | undefined;
+      if (!command) return;
 
       try {
+        if (command._loaded === false && command._filePath) {
+          await loadCommandFunction(command);
+        }
+        if (!command.autocomplete) return;
         await command.autocomplete(interaction);
       } catch (error) {
         this._logger.error(`Error in autocomplete for ${command.name}:`, error);
@@ -574,6 +605,10 @@ export class ClientHandler {
     return this._languageManager;
   }
 
+  public get storageAdapter(): IStorageAdapter | undefined {
+    return this._options.storageAdapter;
+  }
+
   // Utility methods
   public async reloadCommands(): Promise<void> {
     if (!this._commandsPath) {
@@ -583,7 +618,7 @@ export class ClientHandler {
     const startTime = Date.now();
     this._logger.info('Manually reloading commands...');
     await this._commandsInit();
-    this._registerSlashCommands();
+    await this._registerSlashCommands();
     const loadTime = Date.now() - startTime;
     this._logger.info(`Commands reloaded successfully in ${loadTime}ms`);
   }
@@ -612,8 +647,8 @@ export class ClientHandler {
     // Reload commands
     if (this._commandsPath) {
       reloadTasks.push(
-        this._commandsInit().then(() => {
-          this._registerSlashCommands();
+        this._commandsInit().then(async () => {
+          await this._registerSlashCommands();
         })
       );
     }
@@ -737,12 +772,26 @@ export class ClientHandler {
   public destroy(): void {
     this._logger.info('Shutting down XtonCore Enhanced...');
 
-    this._cooldownManager.destroy();
-    this._rateLimiter.destroy();
+    const cleanup = [
+      this._cooldownManager.destroy(),
+      this._rateLimiter.destroy(),
+    ];
     this._hotReloadManager.destroy();
     if (this._jobManager) {
       this._jobManager.destroy();
     }
+    this._performanceManager.destroy();
+    this._permissionManager.destroy();
+    this._componentManager.destroy();
+    for (const [eventName, listener] of this._eventListeners) {
+      this._client.off(eventName, listener);
+    }
+    this._eventListeners.clear();
+    void Promise.all(cleanup).then(async () => {
+      if (this._options.storageAdapter?.disconnect) {
+        await this._options.storageAdapter.disconnect();
+      }
+    });
 
     this._logger.info('XtonCore Enhanced shutdown complete');
   }

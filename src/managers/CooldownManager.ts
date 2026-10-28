@@ -6,8 +6,10 @@ import { MemoryAdapter } from '../adapters/MemoryAdapter';
 export class CooldownManager {
   private adapter: IStorageAdapter;
   private namespace = 'cooldowns';
+  private readonly ownsAdapter: boolean;
 
   constructor(adapter?: IStorageAdapter) {
+    this.ownsAdapter = !adapter;
     this.adapter = adapter || new MemoryAdapter();
   }
 
@@ -104,7 +106,7 @@ export class CooldownManager {
 
   public async destroy(): Promise<void> {
     await this.adapter.clear(this.namespace);
-    if (this.adapter.disconnect) {
+    if (this.ownsAdapter && this.adapter.disconnect) {
       await this.adapter.disconnect();
     }
   }

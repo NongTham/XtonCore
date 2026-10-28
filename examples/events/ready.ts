@@ -16,5 +16,5 @@ export default async function (client: Client) {
     console.log(`👥 ${client.users.cache.size} users cached`);
 
     // Set bot activity status
-    client.user?.setActivity('with XtonCore v2.1', { type: 0 });
+    client.user?.setActivity('with XtonCore v3.0.1', { type: 0 });
 }

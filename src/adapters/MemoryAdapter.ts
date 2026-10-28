@@ -51,7 +51,7 @@ export class MemoryAdapter implements IStorageAdapter {
 
     public async set<T>(namespace: string, key: string, value: T, ttlSeconds?: number): Promise<void> {
         const fullKey = this.getFullKey(namespace, key);
-        const expiresAt = ttlSeconds ? Date.now() + (ttlSeconds * 1000) : null;
+        const expiresAt = ttlSeconds !== undefined ? Date.now() + (ttlSeconds * 1000) : null;
 
         this.cache.set(fullKey, { value, expiresAt });
     }

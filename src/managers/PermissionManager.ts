@@ -149,7 +149,7 @@ export class PermissionManager {
         });
       }
 
-      const permissions = new PermissionsBitField(memberPermissions as any);
+      const permissions = new PermissionsBitField(memberPermissions as PermissionResolvable[]);
       const missing: string[] = [];
 
       for (const permission of requiredPermissions) {

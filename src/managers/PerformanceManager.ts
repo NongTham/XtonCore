@@ -8,6 +8,7 @@ export class PerformanceManager {
   private commandStats: Map<string, CommandStats>;
   private startTime: number;
   private statsFile: string;
+  private readonly statsReady: Promise<void>;
   private _memoryInterval!: NodeJS.Timeout;
   private _saveInterval!: NodeJS.Timeout;
 
@@ -22,9 +23,17 @@ export class PerformanceManager {
       uptime: 0
     };
     this.commandStats = new Map();
-    this.initializeStatsDirectory();
-    this.loadStats();
+    this.statsReady = this.initializeAndLoadStats();
     this.startMemoryMonitoring();
+  }
+
+  private async initializeAndLoadStats(): Promise<void> {
+    await this.initializeStatsDirectory();
+    await this.loadStats();
+  }
+
+  public async waitUntilReady(): Promise<void> {
+    await this.statsReady;
   }
 
   private async initializeStatsDirectory(): Promise<void> {
@@ -49,7 +58,11 @@ export class PerformanceManager {
 
       Clientlogger.info(`Loaded stats for ${this.commandStats.size} commands`);
     } catch (error) {
-      Clientlogger.info('No existing stats file found, starting fresh');
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        Clientlogger.info('No existing stats file found, starting fresh');
+      } else {
+        Clientlogger.error('Failed to load command stats:', error);
+      }
     }
   }
 
@@ -167,6 +180,7 @@ export class PerformanceManager {
   }
 
   public destroy(): void {
+    void this.saveStats();
     if (this._memoryInterval) {
       clearInterval(this._memoryInterval);
     }

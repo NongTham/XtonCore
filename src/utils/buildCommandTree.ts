@@ -1,7 +1,6 @@
 // src/utils/buildCommandTree.ts (ปรับปรุง)
 import { getFilePaths } from './getPaths'; // สมมติว่าเป็น async และ path ถูก resolve ถูกต้อง
 import path from 'path';
-import { pathToFileURL } from 'node:url'; // <--- เพิ่มการ import นี้
 
 export async function buildCommandTree(commandsDir?: string): Promise<any[]> {
   const commandTree: any[] = [];
@@ -11,6 +10,7 @@ export async function buildCommandTree(commandsDir?: string): Promise<any[]> {
   for (const commandFilePath of commandFilePaths) {
     try {
       const absolutePath = path.resolve(commandFilePath);
+      delete require.cache[require.resolve(absolutePath)];
       // Use require for CommonJS compatibility with ts-node
       const commandModule = require(absolutePath);
 

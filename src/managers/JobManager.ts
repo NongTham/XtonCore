@@ -79,6 +79,11 @@ export class JobManager {
       return;
     }
 
+    const existing = this.jobs.get(job.name);
+    if (existing) {
+      existing.task.stop();
+    }
+
     const task = cron.schedule(job.cron, async () => {
       Clientlogger.debug(`Executing job: ${job.name}`);
       try {

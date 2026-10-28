@@ -101,8 +101,8 @@ export class InputSanitizer {
 
   public static isValidUrl(url: string): boolean {
     try {
-      new URL(url);
-      return true;
+      const parsed = new URL(url);
+      return ['http:', 'https:', 'ftp:'].includes(parsed.protocol);
     } catch {
       return false;
     }
@@ -111,7 +111,9 @@ export class InputSanitizer {
   public static sanitizeFileName(fileName: string): string {
     return fileName
       .replace(/[<>:"/\\|?*]/g, '')
+      .replace(/\.\.+/g, '.')
       .replace(/\s+/g, '_')
+      .replace(/^\.+/, '')
       .substring(0, 255);
   }
 }

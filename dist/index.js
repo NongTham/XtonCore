@@ -1320,6 +1320,7 @@ __export(index_exports, {
   JobManager: () => JobManager,
   LanguageManager: () => LanguageManager,
   Logger: () => Logger,
+  MemoryAdapter: () => MemoryAdapter,
   MiddlewareManager: () => MiddlewareManager,
   PaginationBuilder: () => PaginationBuilder,
   PerformanceManager: () => PerformanceManager,
@@ -1381,6 +1382,7 @@ async function buildCommandTree(commandsDir) {
   for (const commandFilePath of commandFilePaths) {
     try {
       const absolutePath = import_path2.default.resolve(commandFilePath);
+      delete require.cache[require.resolve(absolutePath)];
       const commandModule = require(absolutePath);
       let { data, run, deleted, ...rest } = commandModule.default || commandModule;
       if (!data) throw new Error(`File ${commandFilePath} must export "data".`);
@@ -1414,6 +1416,7 @@ async function buildCommandTreeLazy(commandsDir) {
   for (const commandFilePath of commandFilePaths) {
     try {
       const absolutePath = import_path3.default.resolve(commandFilePath);
+      delete require.cache[require.resolve(absolutePath)];
       const metadata = await loadCommandMetadata(absolutePath);
       if (!metadata) continue;
       const lazyCommand = {
@@ -1466,6 +1469,7 @@ async function loadCommandFunction(command) {
   if (command._loaded) return;
   try {
     const startTime = Date.now();
+    delete require.cache[require.resolve(command._filePath)];
     const commandModule = require(command._filePath);
     const { run, autocomplete } = commandModule.default || commandModule;
     if (!run) {
@@ -1515,16 +1519,27 @@ async function getAppCommands(client, guildId) {
 }
 
 // src/utils/areCommandsDifferent.ts
+function normalize(command) {
+  const keys = [
+    "name",
+    "name_localizations",
+    "description",
+    "description_localizations",
+    "default_member_permissions",
+    "dm_permission",
+    "nsfw",
+    "type",
+    "options"
+  ];
+  return JSON.stringify(Object.fromEntries(keys.map((key) => [key, command[key] ?? null])));
+}
 function areCommandsDifferent(existingCommand, localCommand) {
-  if (localCommand.description !== existingCommand.description || (localCommand.options?.length || 0) !== existingCommand.options?.length) {
-    return true;
-  } else {
-    return false;
-  }
+  return normalize(existingCommand) !== normalize(localCommand);
 }
 
 // src/logger.ts
 var import_winston = require("winston");
+var import_fs = __toESM(require("fs"));
 var import_path4 = __toESM(require("path"));
 
 // node_modules/gradient-string/node_modules/chalk/source/vendor/ansi-styles/index.js
@@ -2140,6 +2155,16 @@ gradient.pastel = pastel;
 
 // src/logger.ts
 var logDir = "Logs";
+var logDirEnsured = false;
+function ensureLogDir() {
+  if (!logDirEnsured) {
+    if (!import_fs.default.existsSync(logDir)) {
+      import_fs.default.mkdirSync(logDir, { recursive: true });
+    }
+    logDirEnsured = true;
+  }
+}
+ensureLogDir();
 var filename = import_path4.default.join(logDir, `Client.log`);
 var errorFilename = import_path4.default.join(logDir, `Error.log`);
 var debugFilename = import_path4.default.join(logDir, `Debug.log`);
@@ -2147,7 +2172,7 @@ var Clientlogger = (0, import_winston.createLogger)({
   level: process.env.NODE_ENV === "production" ? "info" : "debug",
   format: import_winston.format.combine(
     import_winston.format.errors({ stack: true }),
-    import_winston.format.label({ label: import_path4.default.basename(process.mainModule?.filename ?? "unknown") }),
+    import_winston.format.label({ label: import_path4.default.basename(process.argv[1] ?? "unknown") }),
     import_winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
     import_winston.format.metadata({ fillExcept: ["message", "level", "timestamp", "label"] })
   ),
@@ -2280,6 +2305,17 @@ async function registerCommands({
       options
     } = localCommand;
     const existingCommand = applicationCommands.cache.find((cmd) => cmd.name === name);
+    const commandPayload = {
+      name,
+      name_localizations,
+      description,
+      description_localizations,
+      default_member_permissions,
+      dm_permission,
+      nsfw: localCommand.nsfw,
+      type: localCommand.type,
+      options
+    };
     if (existingCommand) {
       if (localCommand.deleted) {
         await applicationCommands.delete(existingCommand.id);
@@ -2287,11 +2323,8 @@ async function registerCommands({
         Clientlogger.info(message);
         continue;
       }
-      if (areCommandsDifferent(existingCommand, localCommand)) {
-        await applicationCommands.edit(existingCommand.id, {
-          description,
-          options
-        });
+      if (areCommandsDifferent(existingCommand, commandPayload)) {
+        await applicationCommands.edit(existingCommand.id, commandPayload);
         let message = `\u{1F501} Edited command "${name}".`;
         Clientlogger.info(message);
       }
@@ -2301,15 +2334,7 @@ async function registerCommands({
         Clientlogger.info(message2);
         continue;
       }
-      await applicationCommands.create({
-        name,
-        name_localizations,
-        description,
-        description_localizations,
-        default_member_permissions,
-        dm_permission,
-        options
-      });
+      await applicationCommands.create(commandPayload);
       let message = `\u2705 Registered command "${name}".`;
       Clientlogger.info(message);
     }
@@ -2327,6 +2352,7 @@ var PerformanceManager = class {
   commandStats;
   startTime;
   statsFile;
+  statsReady;
   _memoryInterval;
   _saveInterval;
   constructor() {
@@ -2340,9 +2366,15 @@ var PerformanceManager = class {
       uptime: 0
     };
     this.commandStats = /* @__PURE__ */ new Map();
-    this.initializeStatsDirectory();
-    this.loadStats();
+    this.statsReady = this.initializeAndLoadStats();
     this.startMemoryMonitoring();
+  }
+  async initializeAndLoadStats() {
+    await this.initializeStatsDirectory();
+    await this.loadStats();
+  }
+  async waitUntilReady() {
+    await this.statsReady;
   }
   async initializeStatsDirectory() {
     try {
@@ -2363,7 +2395,11 @@ var PerformanceManager = class {
       }
       Clientlogger.info(`Loaded stats for ${this.commandStats.size} commands`);
     } catch (error) {
-      Clientlogger.info("No existing stats file found, starting fresh");
+      if (error.code === "ENOENT") {
+        Clientlogger.info("No existing stats file found, starting fresh");
+      } else {
+        Clientlogger.error("Failed to load command stats:", error);
+      }
     }
   }
   async saveStats() {
@@ -2459,6 +2495,7 @@ var PerformanceManager = class {
     return report;
   }
   destroy() {
+    void this.saveStats();
     if (this._memoryInterval) {
       clearInterval(this._memoryInterval);
     }
@@ -2503,7 +2540,7 @@ var MemoryAdapter = class {
   }
   async set(namespace, key, value, ttlSeconds) {
     const fullKey = this.getFullKey(namespace, key);
-    const expiresAt = ttlSeconds ? Date.now() + ttlSeconds * 1e3 : null;
+    const expiresAt = ttlSeconds !== void 0 ? Date.now() + ttlSeconds * 1e3 : null;
     this.cache.set(fullKey, { value, expiresAt });
   }
   async delete(namespace, key) {
@@ -2555,7 +2592,9 @@ var MemoryAdapter = class {
 var CooldownManager = class {
   adapter;
   namespace = "cooldowns";
+  ownsAdapter;
   constructor(adapter) {
+    this.ownsAdapter = !adapter;
     this.adapter = adapter || new MemoryAdapter();
   }
   getCooldownKey(userId, commandName) {
@@ -2631,7 +2670,7 @@ var CooldownManager = class {
   }
   async destroy() {
     await this.adapter.clear(this.namespace);
-    if (this.adapter.disconnect) {
+    if (this.ownsAdapter && this.adapter.disconnect) {
       await this.adapter.disconnect();
     }
   }
@@ -2645,6 +2684,8 @@ var ComponentManager = class {
   componentsPath;
   clientHandler;
   // Will be set after ClientHandler is fully constructed
+  initialized = false;
+  interactionListener;
   constructor(client, componentsPath) {
     this.client = client;
     this.handlers = [];
@@ -2654,10 +2695,14 @@ var ComponentManager = class {
     this.clientHandler = handler;
   }
   async initialize() {
+    this.handlers = [];
     if (this.componentsPath) {
       await this.loadComponents();
     }
-    this.setupEventListeners();
+    if (!this.initialized) {
+      this.setupEventListeners();
+      this.initialized = true;
+    }
     Clientlogger.info(`Component Manager initialized with ${this.handlers.length} handlers`);
   }
   async loadComponents() {
@@ -2667,6 +2712,7 @@ var ComponentManager = class {
       for (const filePath of componentFiles) {
         try {
           const absolutePath = import_path6.default.resolve(filePath);
+          delete require.cache[require.resolve(absolutePath)];
           const componentModule = require(absolutePath);
           const handler = componentModule.default || componentModule;
           if (this.isValidHandler(handler)) {
@@ -2687,7 +2733,7 @@ var ComponentManager = class {
     return handler && (typeof handler.customId === "string" || handler.customId instanceof RegExp) && ["button", "selectMenu", "modal"].includes(handler.type) && typeof handler.run === "function";
   }
   setupEventListeners() {
-    this.client.on("interactionCreate", async (interaction) => {
+    this.interactionListener = async (interaction) => {
       if (interaction.isButton()) {
         await this.handleButtonInteraction(interaction);
       } else if (interaction.isSelectMenu()) {
@@ -2695,7 +2741,8 @@ var ComponentManager = class {
       } else if (interaction.isModalSubmit()) {
         await this.handleModalInteraction(interaction);
       }
-    });
+    };
+    this.client.on("interactionCreate", this.interactionListener);
   }
   async handleButtonInteraction(interaction) {
     const handler = this.findHandler(interaction.customId, "button");
@@ -2736,6 +2783,7 @@ var ComponentManager = class {
       if (typeof handler.customId === "string") {
         return handler.customId === customId;
       } else if (handler.customId instanceof RegExp) {
+        handler.customId.lastIndex = 0;
         return handler.customId.test(customId);
       }
       return false;
@@ -2777,6 +2825,14 @@ var ComponentManager = class {
   }
   getHandlerCount() {
     return this.handlers.length;
+  }
+  destroy() {
+    if (this.interactionListener) {
+      this.client.off("interactionCreate", this.interactionListener);
+      this.interactionListener = void 0;
+    }
+    this.handlers = [];
+    this.initialized = false;
   }
 };
 
@@ -2943,7 +2999,10 @@ var RateLimiter = class {
   defaultLimit;
   defaultWindow;
   // in seconds
+  locks = /* @__PURE__ */ new Map();
+  ownsAdapter;
   constructor(defaultLimit = 5, defaultWindow = 60, adapter) {
+    this.ownsAdapter = !adapter;
     this.adapter = adapter || new MemoryAdapter();
     this.defaultLimit = defaultLimit;
     this.defaultWindow = defaultWindow;
@@ -2953,44 +3012,61 @@ var RateLimiter = class {
   }
   async checkLimit(identifier, action = "default", limit = this.defaultLimit, windowSeconds = this.defaultWindow) {
     const key = this.getKey(identifier, action);
-    const now = Date.now();
-    const windowMs = windowSeconds * 1e3;
-    let data = await this.adapter.get(this.namespace, key);
-    if (!data || data.resetTime <= now) {
-      data = {
-        count: 0,
-        resetTime: now + windowMs,
-        blocked: false
-      };
-    }
-    if (data.blocked && data.resetTime > now) {
+    return this.withKeyLock(key, async () => {
+      const now = Date.now();
+      const windowMs = windowSeconds * 1e3;
+      let data = await this.adapter.get(this.namespace, key);
+      if (!data || data.resetTime <= now) {
+        data = {
+          count: 0,
+          resetTime: now + windowMs,
+          blocked: false
+        };
+      }
+      if (data.blocked && data.resetTime > now) {
+        return {
+          allowed: false,
+          remaining: 0,
+          resetTime: data.resetTime,
+          blocked: true
+        };
+      }
+      if (data.resetTime <= now) {
+        data.blocked = false;
+        data.count = 0;
+        data.resetTime = now + windowMs;
+      }
+      const allowed = data.count < limit;
+      if (allowed) {
+        data.count++;
+      } else {
+        data.blocked = true;
+        Clientlogger.warn(`Rate limit exceeded for ${identifier}:${action}`);
+      }
+      const ttl = Math.ceil((data.resetTime - now) / 1e3) + 5;
+      await this.adapter.set(this.namespace, key, data, ttl);
       return {
-        allowed: false,
-        remaining: 0,
+        allowed,
+        remaining: Math.max(0, limit - data.count),
         resetTime: data.resetTime,
-        blocked: true
+        blocked: data.blocked
       };
+    });
+  }
+  async withKeyLock(key, operation) {
+    const previous = this.locks.get(key) || Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => {
+      release = resolve;
+    });
+    this.locks.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.locks.get(key) === current) this.locks.delete(key);
     }
-    if (data.resetTime <= now) {
-      data.blocked = false;
-      data.count = 0;
-      data.resetTime = now + windowMs;
-    }
-    const allowed = data.count < limit;
-    if (allowed) {
-      data.count++;
-    } else {
-      data.blocked = true;
-      Clientlogger.warn(`Rate limit exceeded for ${identifier}:${action}`);
-    }
-    const ttl = Math.ceil((data.resetTime - now) / 1e3) + 5;
-    await this.adapter.set(this.namespace, key, data, ttl);
-    return {
-      allowed,
-      remaining: Math.max(0, limit - data.count),
-      resetTime: data.resetTime,
-      blocked: data.blocked
-    };
   }
   async isBlocked(identifier, action = "default") {
     const key = this.getKey(identifier, action);
@@ -3053,14 +3129,15 @@ var RateLimiter = class {
   }
   async destroy() {
     await this.adapter.clear(this.namespace);
-    if (this.adapter.disconnect) {
+    if (this.ownsAdapter && this.adapter.disconnect) {
       await this.adapter.disconnect();
     }
+    this.locks.clear();
   }
 };
 
 // src/managers/HotReloadManager.ts
-var import_fs = __toESM(require("fs"));
+var import_fs2 = __toESM(require("fs"));
 var import_path7 = __toESM(require("path"));
 var HotReloadManager = class {
   watchers;
@@ -3075,11 +3152,11 @@ var HotReloadManager = class {
     if (!this.enabled) return;
     const { recursive = true, extensions = [".js", ".ts"] } = options;
     try {
-      if (!import_fs.default.existsSync(directory)) {
+      if (!import_fs2.default.existsSync(directory)) {
         Clientlogger.warn(`Hot reload: Directory ${directory} does not exist`);
         return;
       }
-      const watcher = import_fs.default.watch(directory, { recursive }, async (eventType, filename2) => {
+      const watcher = import_fs2.default.watch(directory, { recursive }, async (eventType, filename2) => {
         if (!filename2) return;
         const filePath = import_path7.default.join(directory, filename2);
         const ext = import_path7.default.extname(filename2);
@@ -3219,7 +3296,7 @@ var MiddlewareManager = class {
 
 // src/managers/JobManager.ts
 var cron = __toESM(require("node-cron"));
-var import_fs2 = __toESM(require("fs"));
+var import_fs3 = __toESM(require("fs"));
 var import_path8 = __toESM(require("path"));
 var JobManager = class {
   jobs = /* @__PURE__ */ new Map();
@@ -3235,13 +3312,13 @@ var JobManager = class {
    * Load all jobs from the specified directory
    */
   async loadJobs() {
-    if (!import_fs2.default.existsSync(this.jobsPath)) {
+    if (!import_fs3.default.existsSync(this.jobsPath)) {
       Clientlogger.warn(`Jobs directory not found at ${this.jobsPath}`);
       return 0;
     }
     this.stopAll();
     this.jobs.clear();
-    const jobFiles = import_fs2.default.readdirSync(this.jobsPath).filter((file) => file.endsWith(".ts") || file.endsWith(".js"));
+    const jobFiles = import_fs3.default.readdirSync(this.jobsPath).filter((file) => file.endsWith(".ts") || file.endsWith(".js"));
     let loadedCount = 0;
     for (const file of jobFiles) {
       const filePath = import_path8.default.join(this.jobsPath, file);
@@ -3273,6 +3350,10 @@ var JobManager = class {
     if (job.enabled === false) {
       Clientlogger.debug(`Job ${job.name} is disabled. Skipping...`);
       return;
+    }
+    const existing = this.jobs.get(job.name);
+    if (existing) {
+      existing.task.stop();
     }
     const task = cron.schedule(job.cron, async () => {
       Clientlogger.debug(`Executing job: ${job.name}`);
@@ -3333,7 +3414,7 @@ var JobManager = class {
 };
 
 // src/managers/LanguageManager.ts
-var fs5 = __toESM(require("fs"));
+var fs6 = __toESM(require("fs"));
 var path9 = __toESM(require("path"));
 var LanguageManager = class {
   locales = /* @__PURE__ */ new Map();
@@ -3348,18 +3429,18 @@ var LanguageManager = class {
    */
   async loadLocales() {
     if (!this.localesPath) return 0;
-    if (!fs5.existsSync(this.localesPath)) {
+    if (!fs6.existsSync(this.localesPath)) {
       Clientlogger.warn(`Locales directory not found at ${this.localesPath}`);
       return 0;
     }
     this.locales.clear();
     let loadedCount = 0;
-    const files = fs5.readdirSync(this.localesPath).filter((file) => file.endsWith(".json"));
+    const files = fs6.readdirSync(this.localesPath).filter((file) => file.endsWith(".json"));
     for (const file of files) {
       const locale = path9.basename(file, ".json");
       const filePath = path9.join(this.localesPath, file);
       try {
-        const content = fs5.readFileSync(filePath, "utf-8");
+        const content = fs6.readFileSync(filePath, "utf-8");
         const parsed = JSON.parse(content);
         const flattened = this.flattenObject(parsed);
         this.locales.set(locale, flattened);
@@ -3644,9 +3725,9 @@ var ComponentHelpers = class {
       return menuOption;
     });
     selectMenu.addOptions(menuOptions);
-    if (settings.minValues) selectMenu.setMinValues(settings.minValues);
-    if (settings.maxValues) selectMenu.setMaxValues(settings.maxValues);
-    if (settings.disabled) selectMenu.setDisabled(true);
+    if (settings.minValues !== void 0) selectMenu.setMinValues(settings.minValues);
+    if (settings.maxValues !== void 0) selectMenu.setMaxValues(settings.maxValues);
+    if (settings.disabled !== void 0) selectMenu.setDisabled(settings.disabled);
     return selectMenu;
   }
   static createSelectMenuRow(customId, placeholder, options, settings) {
@@ -3662,9 +3743,9 @@ var ComponentHelpers = class {
       const textInput = new import_discord3.TextInputBuilder().setCustomId(input.customId).setLabel(input.label).setStyle(input.style || import_discord3.TextInputStyle.Short);
       if (input.placeholder) textInput.setPlaceholder(input.placeholder);
       if (input.required !== void 0) textInput.setRequired(input.required);
-      if (input.minLength) textInput.setMinLength(input.minLength);
-      if (input.maxLength) textInput.setMaxLength(input.maxLength);
-      if (input.value) textInput.setValue(input.value);
+      if (input.minLength !== void 0) textInput.setMinLength(input.minLength);
+      if (input.maxLength !== void 0) textInput.setMaxLength(input.maxLength);
+      if (input.value !== void 0) textInput.setValue(input.value);
       rows.push(new import_discord3.ActionRowBuilder().addComponents(textInput));
     }
     modal.addComponents(...rows);
@@ -3797,14 +3878,14 @@ var InputSanitizer = class {
   }
   static isValidUrl(url) {
     try {
-      new URL(url);
-      return true;
+      const parsed = new URL(url);
+      return ["http:", "https:", "ftp:"].includes(parsed.protocol);
     } catch {
       return false;
     }
   }
   static sanitizeFileName(fileName) {
-    return fileName.replace(/[<>:"/\\|?*]/g, "").replace(/\s+/g, "_").substring(0, 255);
+    return fileName.replace(/[<>:"/\\|?*]/g, "").replace(/\.\.+/g, ".").replace(/\s+/g, "_").replace(/^\.+/, "").substring(0, 255);
   }
 };
 
@@ -3935,8 +4016,8 @@ var CommandBuilder = class {
       if (options.required) option.setRequired(true);
       if (options.choices) option.addChoices(...options.choices);
       if (options.autocomplete) option.setAutocomplete(true);
-      if (options.maxLength) option.setMaxLength(options.maxLength);
-      if (options.minLength) option.setMinLength(options.minLength);
+      if (options.maxLength !== void 0) option.setMaxLength(options.maxLength);
+      if (options.minLength !== void 0) option.setMinLength(options.minLength);
       return option;
     });
   }
@@ -3946,8 +4027,8 @@ var CommandBuilder = class {
       if (options.required) option.setRequired(true);
       if (options.choices) option.addChoices(...options.choices);
       if (options.autocomplete) option.setAutocomplete(true);
-      if (options.maxValue) option.setMaxValue(options.maxValue);
-      if (options.minValue) option.setMinValue(options.minValue);
+      if (options.maxValue !== void 0) option.setMaxValue(options.maxValue);
+      if (options.minValue !== void 0) option.setMinValue(options.minValue);
       return option;
     });
   }
@@ -4043,6 +4124,7 @@ var ClientHandler = class _ClientHandler {
   _jobManager;
   _languageManager;
   _logger;
+  _eventListeners = /* @__PURE__ */ new Map();
   static async create(options) {
     const handler = new _ClientHandler(options);
     await handler._initialize();
@@ -4076,18 +4158,24 @@ var ClientHandler = class _ClientHandler {
     this._validationsPath = validationsPath;
     this._componentsPath = componentsPath;
     this._guild = guild;
-    this._options = options;
+    this._options = {
+      ...options,
+      rateLimiting,
+      performance,
+      preloadCommands: preloadCommandsList
+    };
     this._commands = [];
     this._commandsMap = /* @__PURE__ */ new Map();
     this._validationFuncs = [];
     this._logger = Logger.createChild("ClientHandler");
     this._performanceManager = new PerformanceManager();
-    this._cooldownManager = new CooldownManager();
+    this._cooldownManager = new CooldownManager(options.storageAdapter);
     this._componentManager = new ComponentManager(client, componentsPath);
     this._permissionManager = new PermissionManager(ownerIds);
     this._rateLimiter = new RateLimiter(
       rateLimiting.defaultLimit,
-      rateLimiting.defaultWindow
+      rateLimiting.defaultWindow,
+      options.storageAdapter
     );
     this._hotReloadManager = new HotReloadManager(enableHotReload);
     this._middlewareManager = new MiddlewareManager();
@@ -4107,6 +4195,9 @@ var ClientHandler = class _ClientHandler {
   async _initialize() {
     const startTime = Date.now();
     try {
+      if (this._options.storageAdapter?.connect) {
+        await this._options.storageAdapter.connect();
+      }
       const figletData = await new Promise((resolve, reject) => {
         (0, import_figlet.default)("XtonCore", (err, data) => {
           if (err) {
@@ -4120,12 +4211,13 @@ var ClientHandler = class _ClientHandler {
       if (figletData) {
         console.log(dist_default.rainbow(figletData));
       }
-      this._logger.info("XtonCore Enhanced v2.0 is Starting...");
+      this._logger.info("XtonCore Enhanced v3.0.1 is Starting...");
     } catch (error) {
       this._logger.warn("Could not display startup banner.");
     }
     const initTasks = [];
     initTasks.push(this._initializeManagers());
+    initTasks.push(this._performanceManager.waitUntilReady());
     if (this._commandsPath) {
       initTasks.push(this._commandsInit());
     }
@@ -4143,7 +4235,7 @@ var ClientHandler = class _ClientHandler {
     this._logger.info(`\u26A1 Parallel loading completed in ${loadTime}ms`);
     if (this._commandsPath) {
       this._client.once("ready", async () => {
-        this._registerSlashCommands();
+        await this._registerSlashCommands();
         if (this._validationsPath) {
           await this._validationsInit();
         }
@@ -4172,7 +4264,7 @@ var ClientHandler = class _ClientHandler {
       this._hotReloadManager.watchDirectory(this._commandsPath, async (filePath) => {
         this._logger.info(`Reloading commands due to change in ${filePath}`);
         await this._commandsInit();
-        this._registerSlashCommands();
+        await this._registerSlashCommands();
       });
     }
     if (this._eventsPath) {
@@ -4213,15 +4305,22 @@ var ClientHandler = class _ClientHandler {
     const loadType = lazyLoading ? "metadata" : "commands";
     this._logger.debug(`Loaded ${commandArray.length} ${loadType} in ${loadTime}ms`);
   }
-  _registerSlashCommands() {
-    registerCommands({
+  async _registerSlashCommands() {
+    await registerCommands({
       client: this._client,
       commands: this._commands,
       guild: this._guild
-    }).catch((error) => Clientlogger.error("Error during slash command registration:", error));
+    }).catch((error) => {
+      Clientlogger.error("Error during slash command registration:", error);
+      throw error;
+    });
   }
   async _eventsInit() {
     if (!this._eventsPath) return;
+    for (const [eventName, listener] of this._eventListeners) {
+      this._client.off(eventName, listener);
+    }
+    this._eventListeners.clear();
     const startTime = Date.now();
     const eventPaths = await getFolderPaths(this._eventsPath);
     let totalEvents = 0;
@@ -4231,10 +4330,11 @@ var ClientHandler = class _ClientHandler {
       eventFuncPaths.sort();
       if (!eventName) continue;
       totalEvents += eventFuncPaths.length;
-      this._client.on(eventName, async (...args) => {
+      const listener = async (...args) => {
         for (const eventFuncPath of eventFuncPaths) {
           try {
             const absolutePath = import_path9.default.resolve(eventFuncPath);
+            delete require.cache[require.resolve(absolutePath)];
             const eventModule = require(absolutePath);
             const eventFunc = eventModule.default || eventModule;
             if (typeof eventFunc === "function") {
@@ -4251,18 +4351,22 @@ var ClientHandler = class _ClientHandler {
             }
           }
         }
-      });
+      };
+      this._eventListeners.set(eventName, listener);
+      this._client.on(eventName, listener);
     }
     const loadTime = Date.now() - startTime;
     this._logger.debug(`Loaded ${totalEvents} event handlers in ${loadTime}ms`);
   }
   async _validationsInit() {
     if (!this._validationsPath) return;
+    this._validationFuncs = [];
     const validationFilePaths = await getFilePaths(this._validationsPath, true);
     validationFilePaths.sort();
     for (const validationFilePath of validationFilePaths) {
       try {
         const absolutePath = import_path9.default.resolve(validationFilePath);
+        delete require.cache[require.resolve(absolutePath)];
         const fileURL = (0, import_node_url.pathToFileURL)(absolutePath).href;
         const validationModule = await import(fileURL);
         const validationFunc = validationModule.default || validationModule;
@@ -4377,8 +4481,12 @@ var ClientHandler = class _ClientHandler {
     this._client.on("interactionCreate", async (interaction) => {
       if (!interaction.isAutocomplete()) return;
       const command = this._commandsMap.get(interaction.commandName);
-      if (!command || !command.autocomplete) return;
+      if (!command) return;
       try {
+        if (command._loaded === false && command._filePath) {
+          await loadCommandFunction(command);
+        }
+        if (!command.autocomplete) return;
         await command.autocomplete(interaction);
       } catch (error) {
         this._logger.error(`Error in autocomplete for ${command.name}:`, error);
@@ -4422,6 +4530,9 @@ var ClientHandler = class _ClientHandler {
   get languageManager() {
     return this._languageManager;
   }
+  get storageAdapter() {
+    return this._options.storageAdapter;
+  }
   // Utility methods
   async reloadCommands() {
     if (!this._commandsPath) {
@@ -4430,7 +4541,7 @@ var ClientHandler = class _ClientHandler {
     const startTime = Date.now();
     this._logger.info("Manually reloading commands...");
     await this._commandsInit();
-    this._registerSlashCommands();
+    await this._registerSlashCommands();
     const loadTime = Date.now() - startTime;
     this._logger.info(`Commands reloaded successfully in ${loadTime}ms`);
   }
@@ -4453,8 +4564,8 @@ var ClientHandler = class _ClientHandler {
     const reloadTasks = [];
     if (this._commandsPath) {
       reloadTasks.push(
-        this._commandsInit().then(() => {
-          this._registerSlashCommands();
+        this._commandsInit().then(async () => {
+          await this._registerSlashCommands();
         })
       );
     }
@@ -4549,12 +4660,26 @@ var ClientHandler = class _ClientHandler {
   // Cleanup method
   destroy() {
     this._logger.info("Shutting down XtonCore Enhanced...");
-    this._cooldownManager.destroy();
-    this._rateLimiter.destroy();
+    const cleanup = [
+      this._cooldownManager.destroy(),
+      this._rateLimiter.destroy()
+    ];
     this._hotReloadManager.destroy();
     if (this._jobManager) {
       this._jobManager.destroy();
     }
+    this._performanceManager.destroy();
+    this._permissionManager.destroy();
+    this._componentManager.destroy();
+    for (const [eventName, listener] of this._eventListeners) {
+      this._client.off(eventName, listener);
+    }
+    this._eventListeners.clear();
+    void Promise.all(cleanup).then(async () => {
+      if (this._options.storageAdapter?.disconnect) {
+        await this._options.storageAdapter.disconnect();
+      }
+    });
     this._logger.info("XtonCore Enhanced shutdown complete");
   }
 };
@@ -4572,6 +4697,7 @@ var ClientHandler = class _ClientHandler {
   JobManager,
   LanguageManager,
   Logger,
+  MemoryAdapter,
   MiddlewareManager,
   PaginationBuilder,
   PerformanceManager,
