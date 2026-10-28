@@ -1,4 +1,4 @@
-# XtonCore Framework v3.0.1 🚀
+# XtonCore Framework v3.0.2 🚀
 
 <div align="center">
 
