@@ -3,12 +3,10 @@ import {
   ButtonInteraction, 
   SelectMenuInteraction, 
   ModalSubmitInteraction,
-  InteractionType
 } from 'discord.js';
 import { ComponentHandler } from '../dev';
 import { Clientlogger } from '../logger';
 import { getFilePaths } from '../utils/getPaths';
-import { pathToFileURL } from 'node:url';
 import path from 'path';
 
 export class ComponentManager {
@@ -16,6 +14,8 @@ export class ComponentManager {
   private handlers: ComponentHandler[];
   private componentsPath?: string;
   private clientHandler?: any; // Will be set after ClientHandler is fully constructed
+  private initialized = false;
+  private interactionListener?: (interaction: any) => Promise<void>;
 
   constructor(client: Client, componentsPath?: string) {
     this.client = client;
@@ -28,10 +28,14 @@ export class ComponentManager {
   }
 
   public async initialize(): Promise<void> {
+    this.handlers = [];
     if (this.componentsPath) {
       await this.loadComponents();
     }
-    this.setupEventListeners();
+    if (!this.initialized) {
+      this.setupEventListeners();
+      this.initialized = true;
+    }
     Clientlogger.info(`Component Manager initialized with ${this.handlers.length} handlers`);
   }
 
@@ -44,6 +48,7 @@ export class ComponentManager {
       for (const filePath of componentFiles) {
         try {
           const absolutePath = path.resolve(filePath);
+          delete require.cache[require.resolve(absolutePath)];
           // Use require for CommonJS compatibility with ts-node
           const componentModule = require(absolutePath);
           const handler = componentModule.default || componentModule;
@@ -73,7 +78,7 @@ export class ComponentManager {
   }
 
   private setupEventListeners(): void {
-    this.client.on('interactionCreate', async (interaction) => {
+    this.interactionListener = async (interaction) => {
       if (interaction.isButton()) {
         await this.handleButtonInteraction(interaction);
       } else if (interaction.isSelectMenu()) {
@@ -81,7 +86,8 @@ export class ComponentManager {
       } else if (interaction.isModalSubmit()) {
         await this.handleModalInteraction(interaction);
       }
-    });
+    };
+    this.client.on('interactionCreate', this.interactionListener);
   }
 
   private async handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -127,6 +133,7 @@ export class ComponentManager {
       if (typeof handler.customId === 'string') {
         return handler.customId === customId;
       } else if (handler.customId instanceof RegExp) {
+        handler.customId.lastIndex = 0;
         return handler.customId.test(customId);
       }
       
@@ -180,5 +187,14 @@ export class ComponentManager {
 
   public getHandlerCount(): number {
     return this.handlers.length;
+  }
+
+  public destroy(): void {
+    if (this.interactionListener) {
+      this.client.off('interactionCreate', this.interactionListener);
+      this.interactionListener = undefined;
+    }
+    this.handlers = [];
+    this.initialized = false;
   }
 }

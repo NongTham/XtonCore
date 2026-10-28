@@ -16,6 +16,8 @@ function ensureLogDir(): void {
     }
 }
 
+ensureLogDir();
+
 const filename = path.join(logDir, `Client.log`);
 const errorFilename = path.join(logDir, `Error.log`);
 const debugFilename = path.join(logDir, `Debug.log`);
@@ -25,7 +27,7 @@ export const Clientlogger = createLogger({
     level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
     format: format.combine(
         format.errors({ stack: true }),
-        format.label({ label: path.basename(process.mainModule?.filename ?? 'unknown') }),
+        format.label({ label: path.basename(process.argv[1] ?? 'unknown') }),
         format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
         format.metadata({ fillExcept: ['message', 'level', 'timestamp', 'label'] })
     ),

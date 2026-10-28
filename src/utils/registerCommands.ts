@@ -27,6 +27,17 @@ export async function registerCommands({
     } = localCommand;
 
     const existingCommand = applicationCommands.cache.find((cmd: any) => cmd.name === name);
+    const commandPayload = {
+      name,
+      name_localizations,
+      description,
+      description_localizations,
+      default_member_permissions,
+      dm_permission,
+      nsfw: (localCommand as any).nsfw,
+      type: (localCommand as any).type,
+      options,
+    };
 
     if (existingCommand) {
       if (localCommand.deleted) {
@@ -39,11 +50,8 @@ export async function registerCommands({
         continue;
       }
 
-      if (areCommandsDifferent(existingCommand, localCommand)) {
-        await applicationCommands.edit(existingCommand.id, {
-          description,
-          options,
-        });
+      if (areCommandsDifferent(existingCommand, commandPayload)) {
+        await applicationCommands.edit(existingCommand.id, commandPayload);
 
         let message = `🔁 Edited command "${name}".`;
 
@@ -59,15 +67,7 @@ export async function registerCommands({
         continue;
       }
 
-      await applicationCommands.create({
-        name,
-        name_localizations,
-        description,
-        description_localizations,
-        default_member_permissions,
-        dm_permission,
-        options,
-      });
+      await applicationCommands.create(commandPayload);
 
       let message = `✅ Registered command "${name}".`;
 

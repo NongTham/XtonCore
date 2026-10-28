@@ -5,3 +5,6 @@ export { ComponentManager } from './ComponentManager';
 export { PermissionManager } from './PermissionManager';
 export { RateLimiter } from './RateLimiter';
 export { HotReloadManager } from './HotReloadManager';
+export { MiddlewareManager } from './MiddlewareManager';
+export { JobManager } from './JobManager';
+export { LanguageManager } from './LanguageManager';

@@ -20,6 +20,7 @@ import { HotReloadManager } from './managers/HotReloadManager';
 import { MiddlewareManager } from './managers/MiddlewareManager';
 import { JobManager } from './managers/JobManager';
 import { LanguageManager } from './managers/LanguageManager';
+import { IStorageAdapter } from './interfaces/IStorageAdapter';
 
 export interface MiddlewareContext {
   interaction: ChatInputCommandInteraction;
@@ -50,6 +51,7 @@ export interface ClientHandler {
   readonly middlewareManager: MiddlewareManager;
   readonly jobManager?: JobManager;
   readonly languageManager?: LanguageManager;
+  readonly storageAdapter?: IStorageAdapter;
 
   // Methods
   reloadCommands(): Promise<void>;

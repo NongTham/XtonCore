@@ -1,4 +1,4 @@
-# XtonCore Framework v3.0.0 🚀
+# XtonCore Framework v3.0.1 🚀
 
 <div align="center">
 
@@ -19,9 +19,9 @@
 
 ### ⚡ Performance Optimizations
 
-- **Lazy Loading** - Load commands on-demand (~80% faster startup, 67% less memory!)
+- **Deferred command handlers** - Load command handler functions on first use
 - **Parallel Loading** - Load modules simultaneously (~57% faster initialization)
-- **Combined Performance** - Up to 90% faster startup with both optimizations
+- **Combined performance** - Parallel initialization plus deferred command handlers
 - **Hot Reload** - Development-friendly file watching and instant reloading
 
 ### 🎯 Core Features
@@ -100,7 +100,7 @@ async function main() {
     ownerIds: ['YOUR_USER_ID'],
     
     // ⚡ Performance optimizations (enabled by default)
-    lazyLoading: true, // 80% faster startup!
+    lazyLoading: true, // Defer command handler functions until first use
     preloadCommands: ['ping', 'help'], // Preload frequently used commands
     
     // 🔥 Development features
@@ -206,7 +206,7 @@ export default async function (client: Client) {
 
 ### Lazy Loading
 
-Commands are loaded on-demand for dramatically faster startup:
+Command metadata is indexed at startup and handler functions are loaded on first use:
 
 ```typescript
 const handler = await ClientHandler.create({
@@ -224,10 +224,8 @@ console.log(`Loaded: ${stats.loaded}/${stats.total} (${stats.percentage}%)`);
 await handler.preloadAllCommands();
 ```
 
-**Performance Impact:**
-- 🚀 80% faster startup
-- 💾 67% less memory usage
-- ⚡ Commands load in ~3-5ms on first use
+Command startup and memory usage depend on the command modules and runtime
+environment. Benchmark your own bot before making performance commitments.
 
 ### Parallel Loading
 
@@ -240,16 +238,16 @@ const handler = await ClientHandler.create({
   commandsPath: './commands',
   eventsPath: './events',
   componentsPath: './components',
-  // All load in parallel (~57% faster)
+  // All load in parallel
 });
 ```
 
 ### Combined Performance
 
 ```
-Traditional Loading:  1000ms startup, 150MB memory
-With Optimizations:   150ms startup, 50MB memory
-Improvement:          85% faster, 67% less memory! 🚀
+Traditional Loading:  benchmark in your environment
+With Optimizations:   benchmark in your environment
+Improvement:          depends on command count and module initialization cost
 ```
 
 ---
@@ -443,7 +441,7 @@ console.log(stats);
 // }
 
 // Generate full report
-const report = handler.generateReport();
+const report = await handler.generateReport();
 console.log(report);
 ```
 
@@ -481,8 +479,14 @@ interface ClientHandlerOptions {
     enabled: boolean;
     trackMemory?: boolean;
   };
+
+  // 💾 Optional shared storage for cooldowns and rate limits
+  storageAdapter?: IStorageAdapter;
 }
 ```
+
+When omitted, cooldowns and rate limits use separate in-memory adapters. A custom
+`IStorageAdapter` can be shared by both managers for persistent storage.
 
 ---
 
@@ -582,19 +586,12 @@ const handler = await ClientHandler.create({
 
 ---
 
-## 📊 Performance Benchmarks
+## 📊 Performance
 
-| Bot Size | Traditional | XtonCore v2.1 | Improvement |
-|----------|------------|---------------|-------------|
-| Small (10 cmds) | 100ms | 40ms | **60% faster** ⚡ |
-| Medium (50 cmds) | 350ms | 150ms | **57% faster** ⚡ |
-| Large (200 cmds) | 1200ms | 200ms | **83% faster** ⚡ |
-| Huge (500 cmds) | 3000ms | 500ms | **83% faster** ⚡ |
-
-**Memory Usage:**
-- Small: 30MB → 15MB (50% less)
-- Medium: 80MB → 30MB (62% less)
-- Large: 150MB → 50MB (67% less)
+XtonCore defers command handler functions and initializes independent modules in
+parallel. Startup and memory improvements vary with command count, module side
+effects, and the host runtime, so benchmark production workloads in your own
+environment.
 
 ---
 
@@ -616,15 +613,12 @@ const handler = await ClientHandler.create({ /* ... */ });
 const stats = handler.getStats(); // Fully typed!
 ```
 
-See [TYPESCRIPT.md](./TYPESCRIPT.md) for detailed TypeScript usage guide.
+The package includes generated TypeScript declarations for IntelliSense and type checking.
 
 ---
 
 ## 📚 Additional Documentation
 
-- [TYPESCRIPT.md](./TYPESCRIPT.md) - Complete TypeScript guide
-- [PERFORMANCE.md](./PERFORMANCE.md) - Performance optimization guide
-- [LAZY_LOADING.md](./LAZY_LOADING.md) - Lazy loading detailed guide
 - [examples/](./examples/) - Practical code examples
 
 ---
@@ -658,8 +652,8 @@ Contributions, issues, and feature requests are welcome!
 
 ### v2.1.0 - Performance & Feature Update
 
-- ✨ Added lazy loading system (80% faster startup)
-- ✨ Added parallel loading (57% faster initialization)
+- ✨ Added deferred command handler loading
+- ✨ Added parallel initialization
 - ✨ Added component management system
 - ✨ Added advanced permission system
 - ✨ Added rate limiting

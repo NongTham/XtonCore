@@ -49,6 +49,7 @@ export async function buildCommandTreeLazy(commandsDir?: string): Promise<LazyCo
   for (const commandFilePath of commandFilePaths) {
     try {
       const absolutePath = path.resolve(commandFilePath);
+      delete require.cache[require.resolve(absolutePath)];
 
       // ⚡ LAZY LOADING: Only load metadata, not the run function
       const metadata = await loadCommandMetadata(absolutePath);
@@ -125,6 +126,7 @@ export async function loadCommandFunction(command: LazyCommand): Promise<void> {
   try {
     const startTime = Date.now();
 
+    delete require.cache[require.resolve(command._filePath)];
     const commandModule = require(command._filePath);
     const { run, autocomplete } = commandModule.default || commandModule;
 

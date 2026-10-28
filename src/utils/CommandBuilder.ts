@@ -87,8 +87,8 @@ export class CommandBuilder {
       if (options.required) option.setRequired(true);
       if (options.choices) option.addChoices(...options.choices);
       if (options.autocomplete) option.setAutocomplete(true);
-      if (options.maxLength) option.setMaxLength(options.maxLength);
-      if (options.minLength) option.setMinLength(options.minLength);
+      if (options.maxLength !== undefined) option.setMaxLength(options.maxLength);
+      if (options.minLength !== undefined) option.setMinLength(options.minLength);
 
       return option;
     }) as SlashCommandOptionsOnlyBuilder;
@@ -112,8 +112,8 @@ export class CommandBuilder {
       if (options.required) option.setRequired(true);
       if (options.choices) option.addChoices(...options.choices);
       if (options.autocomplete) option.setAutocomplete(true);
-      if (options.maxValue) option.setMaxValue(options.maxValue);
-      if (options.minValue) option.setMinValue(options.minValue);
+      if (options.maxValue !== undefined) option.setMaxValue(options.maxValue);
+      if (options.minValue !== undefined) option.setMinValue(options.minValue);
 
       return option;
     }) as SlashCommandOptionsOnlyBuilder;

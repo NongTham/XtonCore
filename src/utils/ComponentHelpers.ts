@@ -163,9 +163,9 @@ export class ComponentHelpers {
 
     selectMenu.addOptions(menuOptions);
 
-    if (settings.minValues) selectMenu.setMinValues(settings.minValues);
-    if (settings.maxValues) selectMenu.setMaxValues(settings.maxValues);
-    if (settings.disabled) selectMenu.setDisabled(true);
+    if (settings.minValues !== undefined) selectMenu.setMinValues(settings.minValues);
+    if (settings.maxValues !== undefined) selectMenu.setMaxValues(settings.maxValues);
+    if (settings.disabled !== undefined) selectMenu.setDisabled(settings.disabled);
 
     return selectMenu;
   }
@@ -220,9 +220,9 @@ export class ComponentHelpers {
 
       if (input.placeholder) textInput.setPlaceholder(input.placeholder);
       if (input.required !== undefined) textInput.setRequired(input.required);
-      if (input.minLength) textInput.setMinLength(input.minLength);
-      if (input.maxLength) textInput.setMaxLength(input.maxLength);
-      if (input.value) textInput.setValue(input.value);
+      if (input.minLength !== undefined) textInput.setMinLength(input.minLength);
+      if (input.maxLength !== undefined) textInput.setMaxLength(input.maxLength);
+      if (input.value !== undefined) textInput.setValue(input.value);
 
       rows.push(new ActionRowBuilder<TextInputBuilder>().addComponents(textInput));
     }

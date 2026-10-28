@@ -13,8 +13,11 @@ export class RateLimiter {
   private namespace = 'ratelimits';
   private defaultLimit: number;
   private defaultWindow: number; // in seconds
+  private locks = new Map<string, Promise<void>>();
+  private readonly ownsAdapter: boolean;
 
   constructor(defaultLimit: number = 5, defaultWindow: number = 60, adapter?: IStorageAdapter) {
+    this.ownsAdapter = !adapter;
     this.adapter = adapter || new MemoryAdapter();
     this.defaultLimit = defaultLimit;
     this.defaultWindow = defaultWindow;
@@ -31,6 +34,7 @@ export class RateLimiter {
     windowSeconds: number = this.defaultWindow
   ): Promise<{ allowed: boolean; remaining: number; resetTime: number; blocked: boolean }> {
     const key = this.getKey(identifier, action);
+    return this.withKeyLock(key, async () => {
     const now = Date.now();
     const windowMs = windowSeconds * 1000;
 
@@ -82,6 +86,21 @@ export class RateLimiter {
       resetTime: data.resetTime,
       blocked: data.blocked
     };
+    });
+  }
+
+  private async withKeyLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.locks.get(key) || Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => { release = resolve; });
+    this.locks.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.locks.get(key) === current) this.locks.delete(key);
+    }
   }
 
   public async isBlocked(identifier: string, action: string = 'default'): Promise<boolean> {
@@ -162,8 +181,9 @@ export class RateLimiter {
 
   public async destroy(): Promise<void> {
     await this.adapter.clear(this.namespace);
-    if (this.adapter.disconnect) {
+    if (this.ownsAdapter && this.adapter.disconnect) {
       await this.adapter.disconnect();
     }
+    this.locks.clear();
   }
 }
